@@ -8,16 +8,17 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../services/hr_simulator.dart';
 import '../state/measure_controller.dart';
 import '../utils/stats.dart';
+import '../widgets/adaptive_phone_canvas.dart';
 import 'result_page.dart';
 
-class MeasurePage extends StatefulWidget {
-  const MeasurePage({super.key});
+class DataExtractionScreen extends StatefulWidget {
+  const DataExtractionScreen({super.key});
 
   @override
-  State<MeasurePage> createState() => _MeasurePageState();
+  State<DataExtractionScreen> createState() => _DataExtractionScreenState();
 }
 
-class _MeasurePageState extends State<MeasurePage> {
+class _DataExtractionScreenState extends State<DataExtractionScreen> {
   final MeasureController controller = MeasureController();
   final HrSimulator hrEngine = HrSimulator();
 
@@ -28,6 +29,7 @@ class _MeasurePageState extends State<MeasurePage> {
 
   Timer? _measureTimer;
   Timer? _tickTimer;
+  bool _navigatedToResult = false;
 
   static const int measureDurationSeconds = 30;
 
@@ -69,30 +71,31 @@ class _MeasurePageState extends State<MeasurePage> {
 
   Widget _buildCameraArea() {
     final cameraReady = cam?.value.isInitialized == true;
+
     if (!cameraReady) {
       return Container(
-        color: Colors.black,
-        child: const Center(child: CircularProgressIndicator()),
+        color: const Color(0xFFD2D2D2),
+        child: const Center(
+          child: CircularProgressIndicator(),
+        ),
       );
     }
 
     final preview = CameraPreview(cam!);
     final size = cam!.value.previewSize;
+
     if (size == null) return preview;
 
     final previewW = size.height;
     final previewH = size.width;
 
-    return AspectRatio(
-      aspectRatio: 3 / 4,
-      child: ClipRect(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: previewW,
-            height: previewH,
-            child: preview,
-          ),
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewW,
+          height: previewH,
+          child: preview,
         ),
       ),
     );
@@ -102,21 +105,26 @@ class _MeasurePageState extends State<MeasurePage> {
     if (cam == null || cam!.value.isInitialized != true) return;
     if (controller.state == MeasureState.measuring) return;
 
+    _navigatedToResult = false;
     controller.start(durationSeconds: measureDurationSeconds);
 
     await WakelockPlus.enable();
 
     _tickTimer?.cancel();
-    _tickTimer =
-        Timer.periodic(const Duration(seconds: 1), (_) => controller.tick());
+    _tickTimer = Timer.periodic(
+      const Duration(seconds: 1),
+          (_) => controller.tick(),
+    );
 
     _measureTimer?.cancel();
-    _measureTimer = Timer(const Duration(seconds: measureDurationSeconds),
-            () async {
-          if (controller.state == MeasureState.measuring) {
-            await _stopAndFinalize();
-          }
-        });
+    _measureTimer = Timer(
+      const Duration(seconds: measureDurationSeconds),
+          () async {
+        if (controller.state == MeasureState.measuring) {
+          await _stopAndFinalize();
+        }
+      },
+    );
 
     await cam!.startImageStream((CameraImage image) async {
       if (controller.state != MeasureState.measuring) return;
@@ -129,10 +137,8 @@ class _MeasurePageState extends State<MeasurePage> {
       _processing = true;
 
       try {
-        // ======= 여기서 TFLite 모델 추론으로 교체 =======
         final result = hrEngine.infer(image, now);
         controller.updateLiveHr(result.hr, quality: result.quality);
-        // ==============================================
       } finally {
         _processing = false;
       }
@@ -152,8 +158,23 @@ class _MeasurePageState extends State<MeasurePage> {
     final stress = stressIndexFromHrSamples(samples, scaleStdDev: 10.0);
 
     controller.complete(avgHr: avg, stressIndex: stress);
+    _goToResult();
 
     await WakelockPlus.disable();
+  }
+
+  void _goToResult() {
+    if (!mounted || _navigatedToResult) return;
+    _navigatedToResult = true;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DataExtractionResultScreen(
+          avgHr: controller.avgHr ?? 0.0,
+          stressIndex: controller.stressIndex ?? 0.0,
+        ),
+      ),
+    );
   }
 
   void _onButtonPressed() {
@@ -164,15 +185,7 @@ class _MeasurePageState extends State<MeasurePage> {
       case MeasureState.measuring:
         break;
       case MeasureState.completed:
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ResultPage(
-              avgHr: controller.avgHr ?? 0.0,
-              stressIndex: controller.stressIndex ?? 0.0,
-            ),
-          ),
-        );
+        _goToResult();
         break;
     }
   }
@@ -188,11 +201,9 @@ class _MeasurePageState extends State<MeasurePage> {
 
   @override
   Widget build(BuildContext context) {
-    final safePadding = MediaQuery.of(context).padding;
-
     return AnimatedBuilder(
       animation: controller,
-      builder: (_, __) {
+      builder: (_, _) {
         final measuring = controller.state == MeasureState.measuring;
 
         final buttonText = switch (controller.state) {
@@ -202,49 +213,45 @@ class _MeasurePageState extends State<MeasurePage> {
         };
 
         return Scaffold(
-          backgroundColor: Colors.black,
-          body: SafeArea(
-            bottom: false,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final screenW = constraints.maxWidth;
-                final cameraH = screenW * (4 / 3); // 3:4
-                final totalH = constraints.maxHeight;
-
-                final remainingH = (totalH - cameraH).clamp(0.0, totalH);
-                final bottomSafe = safePadding.bottom;
-
-                return Column(
-                  children: [
-                    // 상단 카메라
-                    SizedBox(
-                      width: double.infinity,
-                      height: cameraH,
+          backgroundColor: const Color(0xFFEEF3F5),
+          body: AdaptivePhoneCanvas(
+            child: SizedBox(
+              width: 390,
+              height: 844,
+              child: Stack(
+                children: [
+                  // 카메라
+                  Positioned(
+                    left: 0,
+                    top: 28,
+                    child: SizedBox(
+                      width: 390,
+                      height: 525,
                       child: Stack(
                         children: [
-                          Positioned.fill(child: _buildCameraArea()),
                           Positioned.fill(
-                            child: IgnorePointer(
-                              child: Container(
-                                color: Colors.black.withOpacity(0.15),
-                              ),
+                            child: Container(
+                              color: const Color(0xFFD2D2D2),
+                              child: _buildCameraArea(),
                             ),
                           ),
+
+                          // 상단 상태 오버레이
                           Positioned(
+                            top: 12,
                             left: 0,
                             right: 0,
-                            top: 12,
                             child: Column(
                               children: [
                                 _QualityDots(value: controller.quality),
-                                const SizedBox(height: 10),
+                                const SizedBox(height: 8),
                                 if (measuring)
                                   Text(
                                     '남은 시간: ${controller.remainingSeconds}s',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 16,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
                               ],
@@ -253,79 +260,206 @@ class _MeasurePageState extends State<MeasurePage> {
                         ],
                       ),
                     ),
+                  ),
 
-                    // 하단 여백 영역: "그냥 하얀 배경" + 스크롤 없음
-                    SizedBox(
-                      width: double.infinity,
-                      height: remainingH,
-                      child: Container(
-                        color: Colors.white,
-                        padding: EdgeInsets.only(
-                          left: 16,
-                          right: 16,
-                          top: 12,
-                          bottom: 12 + bottomSafe,
-                        ),
-                        child: AbsorbPointer(
-                          absorbing: measuring, // 측정 중 터치 비활성
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // 위쪽은 여유 공간, 패널은 아래로 붙임
-                              const Spacer(),
-
-                              // HR 표시 (추가 형태 없이)
-                              Row(
-                                children: [
-                                  _MetricBox(
-                                    title: 'PULSE',
-                                    value: controller.liveHr == null
-                                        ? '--'
-                                        : controller.liveHr!.toStringAsFixed(0),
-                                    unit: 'bpm',
-                                  ),
-                                  _MetricBox(
-                                    title: 'STATE',
-                                    value: measuring ? 'MEAS' : 'READY',
-                                    unit: '',
+                  // 정보
+                  Positioned(
+                    left: 0,
+                    top: 552,
+                    child: SizedBox(
+                      width: 390,
+                      height: 231,
+                      child: Stack(
+                        children: [
+                          // 파형 박스
+                          Positioned(
+                            left: 4,
+                            top: 4,
+                            child: Container(
+                              width: 382,
+                              height: 99,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Color(0xFFF6F8F9),
+                                    Color(0xFFF6F8F8),
+                                    Color(0xFFE2E3E4),
+                                  ],
+                                  stops: [0.4471, 0.5982, 1.0],
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color.fromRGBO(0, 0, 0, 0.12),
+                                    offset: Offset(0, 2),
+                                    blurRadius: 4,
                                   ),
                                 ],
                               ),
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                                child: _SignalWaveform(samples: controller.hrSamples),
+                              ),
+                            ),
+                          ),
 
-                              const SizedBox(height: 12),
-
-                              // 버튼
-                              SizedBox(
-                                height: 52,
-                                child: FilledButton(
-                                  onPressed:
-                                  measuring ? null : _onButtonPressed,
-                                  child: Text(
-                                    buttonText,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
+                          // 상태 및 심박수
+                          Positioned(
+                            left: 0,
+                            top: 117,
+                            child: SizedBox(
+                              width: 390,
+                              height: 114,
+                              child: Stack(
+                                children: [
+                                  Positioned(
+                                    left: 203,
+                                    top: 5,
+                                    child: Container(
+                                      width: 182,
+                                      height: 104,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(18),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color.fromRGBO(0, 0, 0, 0.2),
+                                            offset: Offset(-3, 2),
+                                            blurRadius: 4,
+                                          ),
+                                        ],
+                                      ),
+                                      padding: const EdgeInsets.all(14),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            '상태',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Text(
+                                            measuring
+                                                ? '측정중'
+                                                : controller.state ==
+                                                MeasureState.completed
+                                                ? '완료'
+                                                : '대기중',
+                                            style: const TextStyle(
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ),
 
-                              if (controller.state == MeasureState.idle) ...[
-                                const SizedBox(height: 8),
-                                const Text(
-                                  '버튼을 누르면 30초간 측정합니다.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.black54),
-                                ),
-                              ],
-                            ],
+                                  Positioned(
+                                    left: 6,
+                                    top: 5,
+                                    child: Container(
+                                      width: 182,
+                                      height: 104,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(18),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color.fromRGBO(0, 0, 0, 0.2),
+                                            offset: Offset(-3, 2),
+                                            blurRadius: 4,
+                                          ),
+                                        ],
+                                      ),
+                                      padding: const EdgeInsets.all(14),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            '실시간 HR',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Row(
+                                            crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                            children: [
+                                              Text(
+                                                controller.liveHr == null
+                                                    ? '--'
+                                                    : controller.liveHr!
+                                                    .toStringAsFixed(0),
+                                                style: const TextStyle(
+                                                  fontSize: 30,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              const Padding(
+                                                padding:
+                                                EdgeInsets.only(bottom: 4),
+                                                child: Text(
+                                                  'bpm',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // 하단 버튼
+                  Positioned(
+                    left: 20,
+                    right: 20,
+                    bottom: 24,
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: measuring ? null : _onButtonPressed,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.black,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: Text(
+                          buttonText,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
                     ),
-                  ],
-                );
-              },
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -335,7 +469,7 @@ class _MeasurePageState extends State<MeasurePage> {
 }
 
 class _QualityDots extends StatelessWidget {
-  final int value; // 0~5
+  final int value;
   const _QualityDots({required this.value});
 
   @override
@@ -358,56 +492,77 @@ class _QualityDots extends StatelessWidget {
   }
 }
 
-class _MetricBox extends StatelessWidget {
-  final String title;
-  final String value;
-  final String unit;
+class _SignalWaveform extends StatelessWidget {
+  final List<double> samples;
 
-  const _MetricBox({
-    required this.title,
-    required this.value,
-    required this.unit,
-  });
+  const _SignalWaveform({required this.samples});
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        padding: const EdgeInsets.all(10),
-        // 형태 제거 요청이 "패널 배경"에 대한 것이었으므로,
-        // 지표 영역은 최소한의 구분만 유지(완전 제거 원하면 decoration/색도 없앨 수 있음)
-        decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  value,
-                  style: const TextStyle(
-                      fontSize: 28, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  unit,
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+    return CustomPaint(
+      painter: _SignalWavePainter(samples: samples),
+      child: const SizedBox.expand(),
     );
+  }
+}
+
+class _SignalWavePainter extends CustomPainter {
+  final List<double> samples;
+
+  _SignalWavePainter({required this.samples});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final baselineY = size.height / 2;
+
+    final axisPaint = Paint()
+      ..color = const Color(0xFFB6BEC8)
+      ..strokeWidth = 1;
+
+    canvas.drawLine(
+      Offset(0, baselineY),
+      Offset(size.width, baselineY),
+      axisPaint,
+    );
+
+    if (samples.isEmpty) return;
+
+    final points = samples.length > 90 ? samples.sublist(samples.length - 90) : samples;
+    double minV = points.first;
+    double maxV = points.first;
+    for (final v in points) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+
+    final path = Path();
+    final span = (maxV - minV).abs();
+    final amp = size.height * 0.33;
+    final dx = points.length > 1 ? size.width / (points.length - 1) : size.width;
+
+    for (int i = 0; i < points.length; i++) {
+      final x = i * dx;
+      final normalized = span < 0.0001 ? 0.0 : ((points[i] - minV) / span) * 2 - 1;
+      final y = baselineY - (normalized * amp);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+
+    final wavePaint = Paint()
+      ..color = const Color(0xFF2E7BEA)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.drawPath(path, wavePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SignalWavePainter oldDelegate) {
+    return oldDelegate.samples != samples;
   }
 }

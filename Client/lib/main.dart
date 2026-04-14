@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'pages/measure_page.dart';
+import 'pages/main_page.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,9 +18,7 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF2ECC71),
       ),
-      home: const MeasurePage(),
+      home: const MainScreen(),
     );
   }
 }
-
-
