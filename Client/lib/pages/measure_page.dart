@@ -384,7 +384,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
                                         CrossAxisAlignment.start,
                                         children: [
                                           const Text(
-                                            '실시간 HR',
+                                            '심박수',
                                             style: TextStyle(
                                               fontSize: 14,
                                               fontWeight: FontWeight.w700,
