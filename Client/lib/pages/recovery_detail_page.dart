@@ -110,7 +110,7 @@ class RecoveryDetailScreen extends StatelessWidget {
                           top: 2,
                           rangeTitle: '80점 ~ 100점',
                           badgeColor: Color(0xFF618AF0),
-                          stateTitle: '최상의 컨디',
+                          stateTitle: '최상의 컨디션',
                           description: '신체의 방어력이 극대화되어 스트레스를 쉽게 튕겨낼 수 있는 상태입니다.',
                         ),
                         _RecoveryRangeCard(
