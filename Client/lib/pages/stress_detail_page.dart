@@ -108,17 +108,17 @@ class StressDetailScreen extends StatelessWidget {
                       children: const [
                         _StressRangeCard(
                           top: 2,
-                          rangeTitle: '0점 ~ 50점',
+                          rangeTitle: '44점 ~ 100점',
                           badgeColor: Color(0xFF61F098),
-                          stateTitle: '안정 상태',
-                          description: '현재 스트레스 신호가 낮고 비교적 안정적인 상태입니다.',
+                          stateTitle: '스트레스 상태',
+                          description: '높은 수준의 스트레스와 신체적 긴장이 감지됩니다. 잠시 하던 일을 멈추고 가벼운 스트레칭이나 심호흡을 권장합니다.',
                         ),
                         _StressRangeCard(
                           top: 139,
-                          rangeTitle: '51점 ~ 100점',
+                          rangeTitle: '0점 ~ 43점',
                           badgeColor: Color(0xFFF06161),
-                          stateTitle: '스트레스 상태',
-                          description: '현재 교감신경이 과도하게 활성화되어 몸이 긴장하고 있습니다.',
+                          stateTitle: '안정 상태',
+                          description: '차분하고 안정적인 상태를 유지하고 있습니다. 과도한 긴장 없이 편안하게 일에 집중하기 좋은 컨디션입니다.',
                         ),
                       ],
                     ),
