@@ -32,7 +32,7 @@ class MainScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    '카메라를 통해 심박과 스트레스 지수를 측정합니다',
+                    '카메라를 통해 심박수와 스트레스 지수를 측정합니다',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
@@ -57,29 +57,6 @@ class MainScreen extends StatelessWidget {
                       ),
                       child: Column(
                         children: [
-                          Expanded(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(18),
-                                gradient: const LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    Color(0xFFF6F8F9),
-                                    Color(0xFFE3E7EA),
-                                  ],
-                                ),
-                              ),
-                              child: const Center(
-                                child: Icon(
-                                  Icons.monitor_heart_outlined,
-                                  size: 82,
-                                  color: Color(0xFF2F3A45),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
                           _InfoRow(
                             label: '측정 시간',
                             value: '30초',
@@ -87,7 +64,7 @@ class MainScreen extends StatelessWidget {
                           const SizedBox(height: 10),
                           _InfoRow(
                             label: '결과 항목',
-                            value: '평균 HR / 스트레스 지수',
+                            value: '심박수 / 스트레스 / 신호 품질',
                           ),
                         ],
                       ),

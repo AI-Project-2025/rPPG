@@ -34,6 +34,14 @@ class DataExtractionResultScreen extends StatelessWidget {
     return '극도의 피로 및 방전';
   }
 
+  String get _ansStateLabel {
+    if (_stressScore >= 80) return '극심한 스트레스 및 긴장 상태';
+    if (_stressScore >= 60) return '가벼운 스트레스 및 집중 상태';
+    if (_stressScore >= 40) return '최적의 자율신경 균형 상태';
+    if (_stressScore >= 20) return '피로 누적 및 깊은 이완 상태';
+    return '극심한 무기력 및 번아웃 상태';
+  }
+
   @override
   Widget build(BuildContext context) {
     final ansMarkerX = (_stressScore / 100) * 318;
@@ -159,7 +167,7 @@ class DataExtractionResultScreen extends StatelessWidget {
                           top: 402,
                           child: _AnsCard(
                             markerX: ansMarkerX,
-                            stateLabel: _stressScore > 65 ? '피로 누적 상태' : '균형 상태',
+                            stateLabel: _ansStateLabel,
                             onInfoTap: () {
                               Navigator.push(
                                 context,
@@ -496,14 +504,18 @@ class _AnsCard extends StatelessWidget {
             ),
           ),
           Positioned(
-            left: 151,
-            top: 109,
-            child: Text(
-              stateLabel,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFFFF00E6),
+            left: 0,
+            right: 0,
+            bottom: 28,
+            child: Center(
+              child: Text(
+                stateLabel,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFFF00E6),
+                ),
               ),
             ),
           ),

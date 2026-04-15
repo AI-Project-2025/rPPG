@@ -250,7 +250,7 @@ class _RecoveryRangeCard extends StatelessWidget {
                   children: [
                     Positioned(
                       left: 3,
-                      top: 2,
+                      top: -1,
                       child: Text(
                         stateTitle,
                         style: const TextStyle(
@@ -262,7 +262,7 @@ class _RecoveryRangeCard extends StatelessWidget {
                     ),
                     Positioned(
                       left: 4,
-                      top: 24,
+                      top: 21,
                       child: SizedBox(
                         width: 286,
                         child: Text(

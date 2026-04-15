@@ -119,36 +119,36 @@ class AnsBalanceDetailScreen extends StatelessWidget {
                           top: 2,
                           rangeTitle: '80점 ~ 100점',
                           badgeColor: Color(0xFF618AF0),
-                          stateTitle: '최상의 컨디션',
-                          description: '신체의 방어력이 극대화되어 스트레스를 쉽게 튕겨낼 수 있는 상태입니다.',
+                          stateTitle: '극심한 스트레스 및 긴장 상태',
+                          description: '현재 교감신경이 과도하게 활성화되어 몸이 잔뜩 긴장하고 있습니다.',
                         ),
                         _AnsRangeCard(
                           top: 139,
                           rangeTitle: '60점 ~ 79점',
                           badgeColor: Color(0xFF6DF061),
-                          stateTitle: '좋은 회복력',
-                          description: '자율신경계가 튼튼하고 외부 환경 변화에 유연하게 대처할 수 있습니다.',
+                          stateTitle: '가벼운 스트레스 및 집중 상태',
+                          description: '활동적이고 집중력이 높은 상태이나, 약간의 스트레스가 감지됩니다.',
                         ),
                         _AnsRangeCard(
                           top: 276,
                           rangeTitle: '40점 ~ 59점',
                           badgeColor: Color(0xFFF0E461),
-                          stateTitle: '일반적인 활력 수준',
-                          description: '방전되지는 않았지만, 에너지를 아껴 써야 하는 평범한 상태입니다.',
+                          stateTitle: '최적의 자율신경 균형 상태',
+                          description: '긴장과 이완이 완벽한 조화를 이루고 있습니다.',
                         ),
                         _AnsRangeCard(
                           top: 413,
                           rangeTitle: '20점 ~ 39점',
                           badgeColor: Color(0xFFF06161),
-                          stateTitle: '회복력 저하 및 피로 누적',
-                          description: '피로가 누적되어 자율신경계의 융통성이 떨어지고 스트레스에 취약해졌습니다.',
+                          stateTitle: '피로 누적 및 깊은 이완 상태',
+                          description: '부교감신경이 활성화되어 몸이 휴식을 강하게 요구하고 있습니다.',
                         ),
                         _AnsRangeCard(
                           top: 550,
                           rangeTitle: '0점 ~ 19점',
                           badgeColor: Color(0xFF515151),
-                          stateTitle: '극도의 피로 및 방전',
-                          description: '신체의 대처 능력이 바닥나 작은 스트레스에도 크게 흔들릴 수 있는 상태입니다.',
+                          stateTitle: '극심한 무기력 및 번아웃 상태',
+                          description: '신체 에너지가 바닥나 짙은 무기력감을 느낄 수 있는 상태입니다.',
                         ),
                       ],
                     ),
@@ -259,7 +259,7 @@ class _AnsRangeCard extends StatelessWidget {
                   children: [
                     Positioned(
                       left: 3,
-                      top: 2,
+                      top: -1,
                       child: Text(
                         stateTitle,
                         style: const TextStyle(
@@ -271,7 +271,7 @@ class _AnsRangeCard extends StatelessWidget {
                     ),
                     Positioned(
                       left: 4,
-                      top: 24,
+                      top: 21,
                       child: SizedBox(
                         width: 286,
                         child: Text(
