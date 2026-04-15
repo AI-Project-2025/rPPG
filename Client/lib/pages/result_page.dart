@@ -22,15 +22,16 @@ class DataExtractionResultScreen extends StatelessWidget {
   double get _recoveryScore => (100 - _stressScore).clamp(0, 100);
 
   String get _stressLabel {
-    if (_stressScore < 35) return '안정';
-    if (_stressScore < 70) return '주의';
-    return '높음';
+    if (_stressScore > 43) return '스트레스 상태';
+    return '안정 상태';
   }
 
   String get _recoveryLabel {
-    if (_recoveryScore >= 70) return '좋음';
-    if (_recoveryScore >= 40) return '보통';
-    return '낮음';
+    if (_recoveryScore >= 80) return '최상의 컨디션';
+    if (_recoveryScore >= 60) return '좋은 회복력';
+    if (_recoveryScore >= 40) return '일반적인 활력 수준';
+    if (_recoveryScore >= 20) return '회복력 저하 및 피로 누적';
+    return '극도의 피로 및 방전';
   }
 
   @override
