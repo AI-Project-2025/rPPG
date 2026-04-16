@@ -30,7 +30,8 @@ class ConnectionInfo {
 class StreamStatus {
   final String status;
   final String? message;
-  StreamStatus(this.status, this.message);
+  final Map<String, dynamic>? payload;
+  StreamStatus(this.status, this.message, {this.payload});
 }
 
 class StreamData {
@@ -80,7 +81,7 @@ class RppgServerClient {
         if (msg.containsKey('status')) {
           final s = msg['status']?.toString() ?? '';
           final m = msg['message']?.toString();
-          _statusCtrl.add(StreamStatus(s, m));
+          _statusCtrl.add(StreamStatus(s, m, payload: msg));
           return;
         }
 

@@ -12,7 +12,12 @@ import '../widgets/adaptive_phone_canvas.dart';
 import 'result_page.dart';
 
 class DataExtractionScreen extends StatefulWidget {
-  const DataExtractionScreen({super.key});
+  final String serverBaseUrl;
+
+  const DataExtractionScreen({
+    super.key,
+    required this.serverBaseUrl,
+  });
 
   @override
   State<DataExtractionScreen> createState() => _DataExtractionScreenState();
@@ -243,6 +248,16 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
                             right: 0,
                             child: Column(
                               children: [
+                                Text(
+                                  widget.serverBaseUrl,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 6),
                                 _QualityDots(value: controller.quality),
                                 const SizedBox(height: 8),
                                 if (measuring)

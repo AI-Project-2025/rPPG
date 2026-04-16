@@ -3,8 +3,33 @@ import 'package:flutter/material.dart';
 import '../widgets/adaptive_phone_canvas.dart';
 import 'measure_page.dart';
 
-class MainScreen extends StatelessWidget {
+class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
+
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  late final TextEditingController _serverUrlController;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverUrlController = TextEditingController(text: 'http://192.168.0.110:8000');
+  }
+
+  @override
+  void dispose() {
+    _serverUrlController.dispose();
+    super.dispose();
+  }
+
+  String _normalizedBaseUrl() {
+    final raw = _serverUrlController.text.trim();
+    if (raw.isEmpty) return 'http://192.168.0.110:8000';
+    return raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +91,21 @@ class MainScreen extends StatelessWidget {
                             label: '결과 항목',
                             value: '심박수 / 스트레스 / 신호 품질',
                           ),
+                          const SizedBox(height: 14),
+                          TextField(
+                            controller: _serverUrlController,
+                            keyboardType: TextInputType.url,
+                            decoration: InputDecoration(
+                              labelText: '서버 주소',
+                              hintText: 'http://IP:8000',
+                              isDense: true,
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -78,7 +118,9 @@ class MainScreen extends StatelessWidget {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const DataExtractionScreen(),
+                            builder: (_) => DataExtractionScreen(
+                              serverBaseUrl: _normalizedBaseUrl(),
+                            ),
                           ),
                         );
                       },

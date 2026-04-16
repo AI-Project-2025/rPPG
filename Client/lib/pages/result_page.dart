@@ -45,6 +45,8 @@ class DataExtractionResultScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ansMarkerX = (_stressScore / 100) * 318;
+    final qualityScore5 = math.max(1, (5 - stressIndex).round());
+    final qualityScore100 = qualityScore5 * 20;
 
     return Scaffold(
       backgroundColor: const Color(0xFFEEF3F5),
@@ -97,7 +99,7 @@ class DataExtractionResultScreen extends StatelessWidget {
                           top: 1,
                           child: _MiniCard(
                             title: '신호 품질',
-                            value: '${math.max(1, (5 - stressIndex).round())}',
+                            value: '$qualityScore100',
                             unit: '점',
                             info: true,
                             onInfoTap: () {
@@ -105,8 +107,7 @@ class DataExtractionResultScreen extends StatelessWidget {
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => SignalQualityDetailScreen(
-                                    qualityScore:
-                                        math.max(1, (5 - stressIndex).round()),
+                                    qualityScore: qualityScore5,
                                   ),
                                 ),
                               );
@@ -344,21 +345,26 @@ class _LargeMetricCard extends StatelessWidget {
           ),
           Positioned(
             left: 28,
-            top: 75,
+            top: 90,
             child: Text(
               score,
               style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w700),
             ),
           ),
           Positioned(
-            left: 83,
-            top: 92,
+            right: 0,
+            top: 106,
+            width: 120,
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+              textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFFFF00E6),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFFF00D0),
               ),
             ),
           ),
@@ -506,16 +512,17 @@ class _AnsCard extends StatelessWidget {
           Positioned(
             left: 0,
             right: 0,
-            bottom: 28,
-            child: Center(
-              child: Text(
-                stateLabel,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFFF00E6),
-                ),
+            top: 99,
+            child: Text(
+              stateLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFFFF00E6),
               ),
             ),
           ),
