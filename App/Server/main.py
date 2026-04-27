@@ -1,9 +1,9 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 import asyncio
 import json
 import time
-from typing import List
+from typing import List, Dict
 from datetime import datetime
 
 # rPPG / 모델 관련 추가 import
@@ -14,8 +14,288 @@ import collections
 import numpy as np
 import onnxruntime as ort
 import base64
+import pickle
+try:
+    import mediapipe as mp
+except Exception:
+    mp = None
+from scipy.signal import find_peaks, welch, butter, filtfilt
+from scipy.interpolate import interp1d
+from scipy.ndimage import median_filter
 
 app = FastAPI(title="rPPG WebSocket Streaming Server")
+
+STRESS_MODEL_PATH = "final_stress_regression_model.pkl"
+stress_model = None
+if os.path.exists(STRESS_MODEL_PATH):
+    try:
+        with open(STRESS_MODEL_PATH, "rb") as f:
+            stress_model = pickle.load(f)
+        print("스트레스 회귀 모델 로드 완료")
+    except Exception as e:
+        stress_model = None
+        print(f"스트레스 회귀 모델 로드 실패: {e}")
+
+
+def _to_percent(value: float, min_val: float, max_val: float) -> float:
+    if max_val <= min_val:
+        return 0.0
+    raw = (value - min_val) / (max_val - min_val) * 100.0
+    return float(np.clip(raw, 0.0, 100.0))
+
+
+def _score_to_label_color(score: float):
+    if score >= 80:
+        return "최상의 컨디션", "#2E7D32"
+    if score >= 60:
+        return "양호", "#43A047"
+    if score >= 40:
+        return "주의 필요", "#FB8C00"
+    return "관리 필요", "#E53935"
+
+
+def calculate_rppg_metrics(bvp_signal: np.ndarray, fps: float):
+    min_distance = fps / 3.0
+    peaks, _ = find_peaks(bvp_signal, distance=min_distance)
+    ibi = np.diff(peaks) / fps
+
+    if len(ibi) < 5:
+        return {"error": "신호 길이가 너무 짧거나 노이즈가 많아 유의미한 IBI를 추출할 수 없습니다."}
+
+    hr_avg = 60.0 / np.mean(ibi)
+    rmssd = np.sqrt(np.mean(np.diff(ibi) ** 2))
+
+    f_bvp, pxx_bvp = welch(bvp_signal, fps, nperseg=min(len(bvp_signal), int(fps * 10)))
+    valid_idx = np.where((f_bvp >= 0.7) & (f_bvp <= 2.5))[0]
+    if len(valid_idx) > 0:
+        hr_peak_idx = valid_idx[np.argmax(pxx_bvp[valid_idx])]
+        f_hr = f_bvp[hr_peak_idx]
+        signal_band = np.where((f_bvp >= f_hr - 0.2) & (f_bvp <= f_hr + 0.2))[0]
+        total_band = np.where((f_bvp >= 0.0) & (f_bvp <= 4.0))[0]
+        signal_power = np.trapz(pxx_bvp[signal_band], f_bvp[signal_band]) if len(signal_band) > 0 else 0.0
+        total_power = np.trapz(pxx_bvp[total_band], f_bvp[total_band]) if len(total_band) > 0 else 0.0
+        # 수치적으로 noise_power가 0 또는 음수가 될 수 있어 floor를 둔다.
+        # (전처리 신호에서는 total≈signal 케이스가 자주 발생)
+        signal_power = max(float(signal_power), 1e-12)
+        noise_power = max(float(total_power - signal_power), 1e-12)
+        snr = 10 * np.log10(signal_power / noise_power)
+    else:
+        snr = 0.0
+
+    time_peaks = peaks[1:] / fps
+    if len(time_peaks) < 4:
+        lf_hf_ratio = 0.0
+    else:
+        f_interp = interp1d(time_peaks, ibi, kind="cubic", fill_value="extrapolate")
+        fs_interp = 4.0
+        time_interp = np.arange(time_peaks[0], time_peaks[-1], 1 / fs_interp)
+        if len(time_interp) < 8:
+            lf_hf_ratio = 0.0
+        else:
+            ibi_interp = f_interp(time_interp)
+            f_hrv, pxx_hrv = welch(ibi_interp, fs_interp, nperseg=min(len(ibi_interp), int(fs_interp * 60)))
+            lf_band = np.where((f_hrv >= 0.04) & (f_hrv <= 0.15))[0]
+            hf_band = np.where((f_hrv >= 0.15) & (f_hrv <= 0.40))[0]
+            lf_power = np.trapz(pxx_hrv[lf_band], f_hrv[lf_band]) if len(lf_band) > 0 else 0.0
+            hf_power = np.trapz(pxx_hrv[hf_band], f_hrv[hf_band]) if len(hf_band) > 0 else 0.0
+            # HF가 극히 작을 때 0 고정되지 않도록 epsilon 보정
+            eps = 1e-12
+            lf_hf_ratio = (lf_power + eps) / (hf_power + eps)
+
+    return {
+        "Signal_Quality_SNR (dB)": round(float(snr), 2),
+        "Average_HR (BPM)": round(float(hr_avg), 2),
+        "Stress_Resilience_RMSSD (s)": round(float(rmssd), 4),
+        "ANS_Balance_LF_HF": round(float(lf_hf_ratio), 2),
+    }
+
+
+def hampel_filter(x, window_size=15, n_sigmas=3.0):
+    x = np.asarray(x, dtype=float).copy()
+    n = len(x)
+    k = 1.4826  # MAD to sigma scale
+    for i in range(n):
+        start = max(i - window_size, 0)
+        end = min(i + window_size + 1, n)
+        w = x[start:end]
+        med = np.median(w)
+        mad = np.median(np.abs(w - med))
+        if mad == 0:
+            continue
+        sigma = k * mad
+        if np.abs(x[i] - med) > n_sigmas * sigma:
+            x[i] = med
+    return x
+
+
+def butter_bandpass(lowcut, highcut, fs, order=4):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype="band")
+    return b, a
+
+
+def bandpass_filtfilt(x, fs, lowcut=0.7, highcut=4.0, order=4):
+    x = np.asarray(x, dtype=float)
+    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+    return filtfilt(b, a, x, method="pad")
+
+
+def preprocess_ppg(
+    ppg,
+    fs,
+    median_kernel=5,
+    hampel_win=15,
+    hampel_sig=3.0,
+    lowcut=0.7,
+    highcut=4.0,
+    order=4,
+    zscore=True,
+):
+    x = np.squeeze(np.asarray(ppg, dtype=float))
+    if len(x) < 32:
+        return x
+
+    # 1) Median filter
+    if median_kernel is not None and median_kernel >= 3:
+        if median_kernel % 2 == 0:
+            median_kernel += 1
+        x = median_filter(x, size=median_kernel, mode="nearest")
+
+    # 2) Hampel
+    if hampel_win is not None and hampel_win >= 1:
+        x = hampel_filter(x, window_size=hampel_win, n_sigmas=hampel_sig)
+
+    # 3) Bandpass (길이 부족/수치 불안정 시 원신호 유지)
+    try:
+        x = bandpass_filtfilt(x, fs=fs, lowcut=lowcut, highcut=highcut, order=order)
+    except Exception:
+        pass
+
+    # 4) Normalize
+    if zscore:
+        x = (x - np.mean(x)) / (np.std(x) + 1e-12)
+    return x
+
+
+def build_health_report(bvp_30s: List[float], fps: float, onnx_hr_samples: List[float] | None = None):
+    bvp_arr = np.array(bvp_30s, dtype=np.float32)
+    bvp_arr = preprocess_ppg(bvp_arr, fs=fps)
+    metrics = calculate_rppg_metrics(bvp_arr, fps)
+    if "error" in metrics:
+        return {"error": metrics["error"]}
+
+    snr = metrics["Signal_Quality_SNR (dB)"]
+    avg_hr_peak = metrics["Average_HR (BPM)"]
+    avg_hr = float(avg_hr_peak)
+    if onnx_hr_samples:
+        valid_hr = [float(v) for v in onnx_hr_samples if np.isfinite(v) and 40.0 <= float(v) <= 180.0]
+        if valid_hr:
+            avg_hr = float(np.mean(valid_hr))
+    rmssd = metrics["Stress_Resilience_RMSSD (s)"]
+    lf_hf = metrics["ANS_Balance_LF_HF"]
+
+    # 모바일 카메라 환경에서는 SNR 절대값이 보수적으로 나오는 편이라
+    # 점수 변환 구간을 완화해 실제 체감 품질과 더 가깝게 매핑한다.
+    signal_quality_score = round(_to_percent(snr, -8.0, 15.0), 2)
+    # 기존 상한(0.12)이 낮아 100으로 포화되기 쉬워 범위를 완화
+    resilience_score = round(_to_percent(rmssd, 0.01, 0.25), 2)
+    # LF/HF를 로그 스케일로 변환해 점수를 계산하되,
+    # 극단값(노이즈로 인한 급등/급락)으로 0점에 고정되지 않도록 범위를 제한한다.
+    lf_hf_raw = max(float(lf_hf), 1e-12)
+    lf_hf_clamped = float(np.clip(lf_hf_raw, 0.2, 5.0))
+    ans_balance_score = round(
+        float(np.clip(100.0 - abs(np.log(lf_hf_clamped)) * 35.0, 0.0, 100.0)),
+        2
+    )
+    # 신호가 매우 불안정한 경우 ANS 점수를 중립값으로 완화한다.
+    # (극단적인 LF/HF로 인한 0점 급락 방지)
+    if signal_quality_score < 15.0:
+        ans_balance_score = 50.0
+
+    stress_source = "fallback"
+    stress_features = [float(snr), float(avg_hr), float(rmssd), float(lf_hf)]
+    stress_from_resilience_raw = float(np.clip(8.0 - (resilience_score / 100.0) * 7.0, 1.0, 8.0))
+    model_error = None
+    if stress_model is not None:
+        try:
+            features = np.array([stress_features], dtype=np.float32)
+            stress_raw_model = float(stress_model.predict(features)[0])
+            # 모델 버전 불일치로 출력이 경계값에 고정되는 경우가 있어 방어 처리한다.
+            # (예: 1 근처 고정 -> stress_score 0 고정)
+            if not np.isfinite(stress_raw_model):
+                stress_raw = stress_from_resilience_raw
+                stress_source = "fallback(model_nan)"
+            elif stress_raw_model <= 1.05 or stress_raw_model >= 7.95:
+                stress_raw = stress_from_resilience_raw
+                stress_source = "fallback(model_saturated)"
+            else:
+                stress_raw = stress_raw_model
+                stress_source = "model"
+        except Exception as e:
+            model_error = str(e)
+            # 모델 실패 시 단일 지표 대신 복합 점수 기반 fallback
+            stress_percent = float(np.clip(
+                0.45 * (100.0 - resilience_score)
+                + 0.25 * (100.0 - signal_quality_score)
+                + 0.30 * (100.0 - ans_balance_score),
+                0.0,
+                100.0,
+            ))
+            stress_raw = float(1.0 + (stress_percent / 100.0) * 7.0)
+            stress_source = "fallback(model_error)"
+    else:
+        stress_percent = float(np.clip(
+            0.45 * (100.0 - resilience_score)
+            + 0.25 * (100.0 - signal_quality_score)
+            + 0.30 * (100.0 - ans_balance_score),
+            0.0,
+            100.0,
+        ))
+        stress_raw = float(1.0 + (stress_percent / 100.0) * 7.0)
+        stress_source = "fallback(no_model)"
+
+    # 모델 출력 범위를 강제하여 0점 쏠림을 방지한다.
+    stress_raw = float(np.clip(stress_raw, 1.0, 8.0))
+    stress_score = round(_to_percent(stress_raw, 1.0, 8.0), 2)
+
+    detail_entries = {
+        "signal_quality": {"score": signal_quality_score, "text": _score_to_label_color(signal_quality_score)[0], "color": _score_to_label_color(signal_quality_score)[1]},
+        "stress_model": {"score": stress_score, "text": _score_to_label_color(stress_score)[0], "color": _score_to_label_color(stress_score)[1]},
+        "stress_resilience": {"score": resilience_score, "text": _score_to_label_color(resilience_score)[0], "color": _score_to_label_color(resilience_score)[1]},
+        "ans_balance": {"score": ans_balance_score, "text": _score_to_label_color(ans_balance_score)[0], "color": _score_to_label_color(ans_balance_score)[1]},
+    }
+
+    report = {
+        "raw_metrics": metrics,
+        "scores": {
+            "signal_quality": signal_quality_score,
+            "stress_model": stress_score,
+            "stress_resilience": resilience_score,
+            "ans_balance": ans_balance_score,
+            "average_heart_rate": round(avg_hr, 2),
+        },
+        "details": detail_entries,
+        "debug": {
+            "stress_source": stress_source,
+            "stress_features": stress_features,
+            "stress_raw": round(stress_raw, 4),
+            "stress_from_resilience_raw": round(stress_from_resilience_raw, 4),
+            "snr_db": round(float(snr), 4),
+            "model_error": model_error,
+            "lf_hf_raw": round(float(lf_hf_raw), 4),
+            "lf_hf_clamped": round(float(lf_hf_clamped), 4),
+            "avg_hr_peak_based": round(float(avg_hr_peak), 2),
+            "avg_hr_source": "onnx_mean" if onnx_hr_samples else "peak_based",
+        },
+    }
+    print(
+        "[report debug] "
+        f"source={stress_source}, snr={snr:.2f}, stress_raw={stress_raw:.2f}, "
+        f"scores={report['scores']}"
+    )
+    return report
 
 
 # ===============================================================
@@ -43,7 +323,7 @@ class KalmanFilter1D:
 
 
 class OpenCVFaceDetector:
-    """OpenCV Haar Cascade를 사용한 얼굴 감지기"""
+    """OpenCV Haar Cascade를 사용한 얼굴 감지기 (fallback)"""
     def __init__(self, min_confidence=0.5):
         cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
@@ -52,9 +332,9 @@ class OpenCVFaceDetector:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(60, 60),
+            scaleFactor=1.05,
+            minNeighbors=3,
+            minSize=(24, 24),
         )
         detections = []
         for (x, y, w, h) in faces:
@@ -63,6 +343,62 @@ class OpenCVFaceDetector:
 
     def close(self):
         pass
+
+
+class MediaPipeFaceDetector:
+    """MediaPipe FaceDetection을 사용한 얼굴 감지기 (실시간 코드와 동일)"""
+    def __init__(self, min_confidence=0.5):
+        if mp is None:
+            raise RuntimeError("mediapipe 패키지를 불러올 수 없습니다.")
+        self.mp_face_detection = mp.solutions.face_detection
+        self.face_detector = self.mp_face_detection.FaceDetection(
+            model_selection=0,
+            min_detection_confidence=min_confidence,
+        )
+
+    def detect(self, frame_bgr):
+        h, w = frame_bgr.shape[:2]
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        frame_rgb.flags.writeable = False
+        results = self.face_detector.process(frame_rgb)
+        frame_rgb.flags.writeable = True
+
+        detections = []
+        if results.detections:
+            for det in results.detections:
+                bbox = det.location_data.relative_bounding_box
+                x = int(bbox.xmin * w)
+                y = int(bbox.ymin * h)
+                width = int(bbox.width * w)
+                height = int(bbox.height * h)
+                conf = det.score[0]
+                detections.append(
+                    {"box": (x, y, width, height), "confidence": float(conf)}
+                )
+        return detections
+
+    def close(self):
+        self.face_detector.close()
+
+
+def detect_face_with_rotation(frame_bgr):
+    """
+    원본/시계90/반시계90 방향을 순차 시도해 얼굴 검출 성공 프레임을 반환.
+    클라이언트 프레임 방향 차이로 검출률이 낮을 때 보정하기 위한 fallback.
+    """
+    candidates = [
+        frame_bgr,
+        cv2.flip(frame_bgr, 1),
+        cv2.rotate(frame_bgr, cv2.ROTATE_90_CLOCKWISE),
+        cv2.rotate(frame_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE),
+        cv2.flip(cv2.rotate(frame_bgr, cv2.ROTATE_90_CLOCKWISE), 1),
+        cv2.flip(cv2.rotate(frame_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE), 1),
+    ]
+    for candidate in candidates:
+        detections = face_detector.detect(candidate)
+        if detections:
+            return candidate, detections
+    return frame_bgr, []
 
 
 class MeasurementLogger:
@@ -132,10 +468,16 @@ HR_PATH = "get_hr.onnx"
 
 state = load_state(STATE_PATH)
 model = load_model(MODEL_PATH)
+print(f"rPPG model loaded from: {os.path.abspath(MODEL_PATH)}")
 
 welch_session = ort.InferenceSession(WELCH_PATH) if os.path.exists(WELCH_PATH) else None
 hr_session = ort.InferenceSession(HR_PATH) if os.path.exists(HR_PATH) else None
-face_detector = OpenCVFaceDetector(min_confidence=0.5)
+try:
+    face_detector = MediaPipeFaceDetector(min_confidence=0.5)
+    print("face detector: MediaPipe")
+except Exception as e:
+    face_detector = OpenCVFaceDetector(min_confidence=0.5)
+    print(f"face detector fallback(OpenCV): {e}")
 
 
 def get_hr_from_onnx(bvp_array):
@@ -521,12 +863,29 @@ async def get():
     return HTMLResponse(content=html)
 
 
+@app.get("/api/connection-info")
+async def connection_info(request: Request):
+    host = request.headers.get("host", "localhost:8000")
+    ws_url = f"ws://{host}/ws"
+    if request.url.scheme == "https":
+        ws_url = f"wss://{host}/ws"
+
+    return {
+        "status": "success",
+        "recommended_url": ws_url,
+        "websocket_urls": [
+            {"url": ws_url, "label": "default"},
+        ],
+    }
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 엔드포인트 - 실시간 스트리밍"""
     await manager.connect(websocket)
     streaming_active = False
     stream_task = None
+    frame_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
 
     try:
         while True:
@@ -536,19 +895,40 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 message = json.loads(data)
                 action = message.get("action")
+                if action in ("start_streaming", "stop_streaming", "frame"):
+                    print(f"[ws action] {action}")
 
                 if action == "start_streaming":
                     if not streaming_active:
                         streaming_active = True
                         fps = message.get("fps", 30)
                         stream_task = asyncio.create_task(
-                            stream_data(websocket, fps)
+                            stream_data(websocket, fps, frame_queue)
                         )
                         await manager.send_personal_message(
                             json.dumps({
                                 "status": "streaming_started",
                                 "fps": fps,
                                 "message": "스트리밍이 시작되었습니다."
+                            }),
+                            websocket
+                        )
+
+                elif action == "frame":
+                    frame_data = message.get("frame_data")
+                    if isinstance(frame_data, str) and frame_data:
+                        # 최신 프레임 우선 처리: 큐가 꽉 찼으면 오래된 프레임 1개 폐기
+                        if frame_queue.full():
+                            try:
+                                frame_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                        await frame_queue.put(frame_data)
+                    else:
+                        await manager.send_personal_message(
+                            json.dumps({
+                                "status": "error",
+                                "message": "frame_data가 비어있거나 문자열이 아닙니다."
                             }),
                             websocket
                         )
@@ -588,6 +968,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
 
     except WebSocketDisconnect:
+        print("[ws] client disconnected")
         manager.disconnect(websocket)
         if stream_task:
             stream_task.cancel()
@@ -598,20 +979,18 @@ async def websocket_endpoint(websocket: WebSocket):
             stream_task.cancel()
 
 
-async def stream_data(websocket: WebSocket, fps: int = 30):
+async def stream_data(websocket: WebSocket, fps: int = 30, frame_queue: asyncio.Queue = None):
     """
-    웹캠에서 프레임을 읽고, rPPG 파이프라인(질문에서 제공한 로직과 동일한 구성)을 통해
+    클라이언트에서 전달받은 프레임을 기반으로 rPPG 파이프라인을 실행하여
     BVP 및 HR(BPM)을 추정하여 WebSocket으로 실시간 전송
     """
     global state
 
-    # 웹캠 열기
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
+    if frame_queue is None:
         await manager.send_personal_message(
             json.dumps({
                 "status": "error",
-                "message": "웹캠을 열 수 없습니다. 카메라 장치를 확인하세요."
+                "message": "프레임 큐가 초기화되지 않았습니다."
             }),
             websocket
         )
@@ -635,6 +1014,7 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
     # HR 업데이트 주기 (초 단위, 예: 1초마다 새 HR 계산)
     HR_UPDATE_SEC = 1.0
     hr_last_update_frame = 0
+    hr_for_report: List[float] = []
 
     # BBox 칼만 스무딩 필터
     pn, mn = 1e-2, 5e-1
@@ -649,32 +1029,79 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
     face_timeout_frames = int(FACE_TIMEOUT_SEC * measured_fps)
 
     frame_count = 0
+    report_sent = False
+    bvp_30s = []
+    REPORT_TOTAL_SEC = 35.0
+    DISCARD_HEAD_SEC = 5.0
+    stream_start_time = time.time()
+    stats_start_time = time.time()
+    stats_last_print = time.time()
+    decoded_frames = 0
+    face_detected_frames = 0
+    zero_bvp_frames = 0
 
     try:
         while True:
             loop_start = time.time()
-
-            ret, frame = cap.read()
-            if not ret:
+            # 클라이언트가 보낸 base64 JPEG 프레임 대기
+            try:
+                frame_b64 = await asyncio.wait_for(frame_queue.get(), timeout=2.0)
+            except asyncio.TimeoutError:
+                # 프레임 수신이 잠시 끊겨도 측정 시간은 계속 흐르므로
+                # 35초가 지난 시점에는 리포트를 생성/전송한다.
+                if not report_sent and (time.time() - stream_start_time) >= REPORT_TOTAL_SEC:
+                    report_sent = True
+                    report = build_health_report(bvp_30s, measured_fps, onnx_hr_samples=hr_for_report)
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "status": "report_ready",
+                            "message": "35초 측정(앞 5초 제외)이 완료되어 건강 리포트가 생성되었습니다.",
+                            "report": report,
+                        }),
+                        websocket,
+                    )
                 await manager.send_personal_message(
                     json.dumps({
-                        "status": "error",
-                        "message": "웹캠에서 프레임을 읽을 수 없습니다."
+                        "status": "waiting_frame",
+                        "message": "클라이언트 프레임 대기 중입니다."
                     }),
                     websocket
                 )
-                break
+                continue
+
+            try:
+                frame_bytes = base64.b64decode(frame_b64)
+                nparr = np.frombuffer(frame_bytes, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            except Exception:
+                frame = None
+
+            if frame is None:
+                await manager.send_personal_message(
+                    json.dumps({
+                        "status": "error",
+                        "message": "클라이언트 프레임 디코딩 실패"
+                    }),
+                    websocket
+                )
+                continue
 
             frame_count += 1
+            decoded_frames += 1
 
-            # 얼굴 감지
-            detections = face_detector.detect(frame)
+            # 얼굴 감지 (모바일 입력 방향/미러링 차이를 보정)
+            frame_for_detect, detections = detect_face_with_rotation(frame)
             facial_img = None
 
             if detections:
-                detection = detections[0]
+                face_detected_frames += 1
+                # 가장 신뢰도 높은 얼굴을 선택해 잘못된 ROI를 줄인다.
+                detection = max(
+                    detections,
+                    key=lambda d: float(d.get("confidence", 0.0)),
+                )
                 raw_x, raw_y, raw_w, raw_h = detection['box']
-                h, w = frame.shape[:2]
+                h, w = frame_for_detect.shape[:2]
 
                 # BBox 칼만 초기화
                 if not bbox_initialized:
@@ -698,7 +1125,7 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
                 x1, y1 = max(0, s_x), max(0, s_y)
                 x2, y2 = min(w, s_x + s_w), min(h, s_y + s_h)
                 if x2 > x1 and y2 > y1:
-                    face_crop = frame[y1:y2, x1:x2]
+                    face_crop = frame_for_detect[y1:y2, x1:x2]
                     if face_crop.size > 0:
                         face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
                         resized = cv2.resize(face_rgb, (36, 36), interpolation=cv2.INTER_AREA)
@@ -713,6 +1140,7 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
                 bvp_val = float(output)
             else:
                 bvp_val = 0.0
+                zero_bvp_frames += 1
                 # 얼굴 감지 실패가 일정 시간 이상 지속되면 리셋
                 if bbox_initialized and (frame_count - last_face_detected_frame) > face_timeout_frames:
                     bvp_buffer = collections.deque([0.0] * WINDOW_SIZE_FRAMES, maxlen=WINDOW_SIZE_FRAMES)
@@ -724,14 +1152,23 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
             bvp_buffer.append(bvp_val)
             # 프레임별 BVP 기록 (원래 코드의 rppg_series 와 동일 개념)
             rppg_history.append(bvp_val)
+            elapsed_from_start = time.time() - stream_start_time
+            if elapsed_from_start >= DISCARD_HEAD_SEC:
+                bvp_30s.append(bvp_val)
 
             # HR 계산 (Welch + HR onnx) - 고정된 10초 윈도우 기준 BPM
             # -> 지정한 간격(HR_UPDATE_SEC)마다 한 번만 재계산
             if frame_count - hr_last_update_frame >= int(measured_fps * HR_UPDATE_SEC):
                 current_hr_raw = get_hr_from_onnx(list(bvp_buffer))
-                if not np.isnan(current_hr_raw) and current_hr_raw > 40:
-                    hr_display = hr_kf.update(current_hr_raw)
+                if not np.isnan(current_hr_raw) and 40.0 <= current_hr_raw <= 180.0:
+                    candidate_hr = float(hr_kf.update(current_hr_raw))
+                    # 급격한 점프(노이즈/오검출)를 제한해 비정상 치솟음을 억제
+                    if hr_display > 0 and abs(candidate_hr - hr_display) > 25.0:
+                        candidate_hr = hr_display + (25.0 if candidate_hr > hr_display else -25.0)
+                    hr_display = float(np.clip(candidate_hr, 40.0, 180.0))
                     hr_last_update_frame = frame_count
+                    if 40.0 <= hr_display <= 180.0:
+                        hr_for_report.append(float(hr_display))
                 # 비정상 값이면 이전 값 유지
 
             # rPPG 시그널: 원래 코드에서의 rppg_series 를 실시간으로 전달
@@ -743,19 +1180,41 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
                 "timestamp": datetime.now().isoformat(),
                 "heart_rate": round(hr_display, 2) if hr_display > 0 else None,
                 "signal_strength": float(abs(bvp_val)),
-                "rppg_signal": [float(x) for x in rppg_signal],
+                "rppg_signal": [float(x) for x in rppg_signal[-180:]],
                 "bvp": float(bvp_val),
             }
 
-            # 웹캠 프레임을 JPEG로 인코딩하여 base64로 전송 (미리보기용)
-            try:
-                _, jpeg_buf = cv2.imencode(".jpg", frame)
-                frame_b64 = base64.b64encode(jpeg_buf).decode("ascii")
-                stream_data_payload["frame_image"] = frame_b64
-            except Exception:
-                pass
-
             await websocket.send_text(json.dumps(stream_data_payload))
+
+            now = time.time()
+            if now - stats_last_print >= 2.0:
+                elapsed_total = max(now - stats_start_time, 1e-6)
+                recv_fps = decoded_frames / elapsed_total
+                face_ratio = (face_detected_frames / max(decoded_frames, 1)) * 100.0
+                zero_bvp_ratio = (zero_bvp_frames / max(decoded_frames, 1)) * 100.0
+                print(
+                    "[rPPG debug] "
+                    f"recv_fps={recv_fps:.1f}, "
+                    f"face_detect_ratio={face_ratio:.1f}%, "
+                    f"zero_bvp_ratio={zero_bvp_ratio:.1f}%, "
+                    f"queue_size={frame_queue.qsize()}"
+                )
+                stats_last_print = now
+
+            # 실제 수신 FPS가 요청 FPS보다 낮을 수 있으므로
+            # 프레임 개수 대신 경과 시간(35초)으로 리포트 생성 시점을 판단한다.
+            # 단, 점수 계산에는 앞 5초를 제외한 뒤 30초만 사용한다.
+            if not report_sent and (time.time() - stream_start_time) >= REPORT_TOTAL_SEC:
+                report_sent = True
+                report = build_health_report(bvp_30s, measured_fps, onnx_hr_samples=hr_for_report)
+                await manager.send_personal_message(
+                    json.dumps({
+                        "status": "report_ready",
+                        "message": "35초 측정(앞 5초 제외)이 완료되어 건강 리포트가 생성되었습니다.",
+                        "report": report,
+                    }),
+                    websocket,
+                )
 
             # FPS 유지
             elapsed = time.time() - loop_start
@@ -774,8 +1233,6 @@ async def stream_data(websocket: WebSocket, fps: int = 30):
             }),
             websocket
         )
-    finally:
-        cap.release()
 
 
 @app.get("/health")

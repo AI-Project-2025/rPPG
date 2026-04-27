@@ -11,19 +11,41 @@ import '../widgets/adaptive_phone_canvas.dart';
 class DataExtractionResultScreen extends StatelessWidget {
   final double avgHr;
   final double stressIndex;
+  final Map<String, dynamic>? serverReport;
 
   const DataExtractionResultScreen({
     super.key,
     required this.avgHr,
     required this.stressIndex,
+    this.serverReport,
   });
 
-  double get _stressScore => (stressIndex * 25).clamp(0, 100);
-  double get _recoveryScore => (100 - _stressScore).clamp(0, 100);
+  Map<String, dynamic>? get _serverScores {
+    final scores = serverReport?['scores'];
+    return scores is Map<String, dynamic> ? scores : null;
+  }
+
+  int get _stressScore =>
+      (_serverScores?['stress_model'] as num?)?.round().clamp(0, 100) ??
+      (stressIndex * 25).round().clamp(0, 100);
+  int get _recoveryScore =>
+      (_serverScores?['stress_resilience'] as num?)?.round().clamp(0, 100) ??
+      (100 - _stressScore).clamp(0, 100);
+  int get _ansScore =>
+      (_serverScores?['ans_balance'] as num?)?.round().clamp(0, 100) ??
+      (100 - _stressScore).clamp(0, 100);
+  int get _qualityScore100 =>
+      (_serverScores?['signal_quality'] as num?)?.round().clamp(0, 100) ??
+      (math.max(1, (5 - stressIndex).round()) * 20);
 
   String get _stressLabel {
-    if (_stressScore > 43) return '스트레스 상태';
+    if (_stressScore >= 44) return '스트레스 상태';
     return '안정 상태';
+  }
+
+  Color get _stressLabelColor {
+    if (_stressScore >= 44) return const Color(0xFFB83E3E);
+    return const Color(0xFF2E9E66);
   }
 
   String get _recoveryLabel {
@@ -34,19 +56,36 @@ class DataExtractionResultScreen extends StatelessWidget {
     return '극도의 피로 및 방전';
   }
 
+  Color get _recoveryLabelColor {
+    if (_recoveryScore >= 80) return const Color(0xFF3E62BF);
+    if (_recoveryScore >= 60) return const Color(0xFF2E9E66);
+    if (_recoveryScore >= 40) return const Color(0xFF9E8D21);
+    if (_recoveryScore >= 20) return const Color(0xFFB83E3E);
+    return const Color(0xFF3E3E3E);
+  }
+
   String get _ansStateLabel {
-    if (_stressScore >= 80) return '극심한 스트레스 및 긴장 상태';
-    if (_stressScore >= 60) return '가벼운 스트레스 및 집중 상태';
-    if (_stressScore >= 40) return '최적의 자율신경 균형 상태';
-    if (_stressScore >= 20) return '피로 누적 및 깊은 이완 상태';
+    if (_ansScore >= 80) return '극심한 스트레스 및 긴장 상태';
+    if (_ansScore >= 60) return '가벼운 스트레스 및 집중 상태';
+    if (_ansScore >= 40) return '최적의 자율신경 균형 상태';
+    if (_ansScore >= 20) return '피로 누적 및 깊은 이완 상태';
     return '극심한 무기력 및 번아웃 상태';
+  }
+
+  Color get _ansStateLabelColor {
+    if (_ansScore >= 80) return const Color(0xFFB83E3E);
+    if (_ansScore >= 60) return const Color(0xFF9E8D21);
+    if (_ansScore >= 40) return const Color(0xFF2E9E66);
+    if (_ansScore >= 20) return const Color(0xFF3E62BF);
+    return const Color(0xFF3E3E3E);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ansMarkerX = (_stressScore / 100) * 318;
-    final qualityScore5 = math.max(1, (5 - stressIndex).round());
-    final qualityScore100 = qualityScore5 * 20;
+    final ansMarkerX = (_ansScore / 100.0) * 318;
+    final qualityScore100 = _qualityScore100;
+    final qualityScore5 = (qualityScore100 / 20).round().clamp(1, 5);
+    final avgHrDisplay = (_serverScores?['average_heart_rate'] as num?)?.toDouble() ?? avgHr;
 
     return Scaffold(
       backgroundColor: const Color(0xFFEEF3F5),
@@ -119,7 +158,7 @@ class DataExtractionResultScreen extends StatelessWidget {
                           top: 1,
                           child: _MiniCard(
                             title: '평균 심박수',
-                            value: avgHr.toStringAsFixed(0),
+                            value: avgHrDisplay.toStringAsFixed(0),
                             unit: 'BPM',
                           ),
                         ),
@@ -129,14 +168,15 @@ class DataExtractionResultScreen extends StatelessWidget {
                           child: _LargeMetricCard(
                             icon: Icons.self_improvement,
                             title: '스트레스',
-                            score: _stressScore.toStringAsFixed(0),
+                            score: '$_stressScore',
                             label: _stressLabel,
+                            labelColor: _stressLabelColor,
                             onInfoTap: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => StressDetailScreen(
-                                    stressScore: _stressScore.round().clamp(0, 100),
+                                    stressScore: _stressScore,
                                   ),
                                 ),
                               );
@@ -149,14 +189,15 @@ class DataExtractionResultScreen extends StatelessWidget {
                           child: _LargeMetricCard(
                             icon: Icons.monitor_heart_outlined,
                             title: '스트레스 회복력',
-                            score: _recoveryScore.toStringAsFixed(0),
+                            score: '$_recoveryScore',
                             label: _recoveryLabel,
+                            labelColor: _recoveryLabelColor,
                             onInfoTap: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => RecoveryDetailScreen(
-                                    recoveryScore: _recoveryScore.round().clamp(0, 100),
+                                    recoveryScore: _recoveryScore,
                                   ),
                                 ),
                               );
@@ -169,12 +210,13 @@ class DataExtractionResultScreen extends StatelessWidget {
                           child: _AnsCard(
                             markerX: ansMarkerX,
                             stateLabel: _ansStateLabel,
+                            stateLabelColor: _ansStateLabelColor,
                             onInfoTap: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => AnsBalanceDetailScreen(
-                                    ansScore: (100 - _stressScore).round().clamp(0, 100),
+                                    ansScore: _ansScore,
                                   ),
                                 ),
                               );
@@ -269,7 +311,7 @@ class _MiniCard extends StatelessWidget {
                     ),
                   ),
                   Positioned(
-                    left: 132,
+                    left: unit == 'BPM' ? 127 : 132,
                     top: 32,
                     child: Text(
                       unit,
@@ -291,6 +333,7 @@ class _LargeMetricCard extends StatelessWidget {
   final String title;
   final String score;
   final String label;
+  final Color labelColor;
   final VoidCallback? onInfoTap;
 
   const _LargeMetricCard({
@@ -298,6 +341,7 @@ class _LargeMetricCard extends StatelessWidget {
     required this.title,
     required this.score,
     required this.label,
+    required this.labelColor,
     this.onInfoTap,
   });
 
@@ -361,10 +405,10 @@ class _LargeMetricCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               softWrap: false,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFFFF00D0),
+                color: labelColor,
               ),
             ),
           ),
@@ -377,11 +421,13 @@ class _LargeMetricCard extends StatelessWidget {
 class _AnsCard extends StatelessWidget {
   final double markerX;
   final String stateLabel;
+  final Color stateLabelColor;
   final VoidCallback? onInfoTap;
 
   const _AnsCard({
     required this.markerX,
     required this.stateLabel,
+    required this.stateLabelColor,
     this.onInfoTap,
   });
 
@@ -489,7 +535,7 @@ class _AnsCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: Color(0xFF72B1B3),
+                        color: Color(0xFF3B7E80),
                       ),
                     ),
                   ),
@@ -501,7 +547,7 @@ class _AnsCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: Color(0xFFD35252),
+                        color: Color(0xFFB83E3E),
                       ),
                     ),
                   ),
@@ -519,10 +565,10 @@ class _AnsCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               softWrap: false,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFFFF00E6),
+                color: stateLabelColor,
               ),
             ),
           ),

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../widgets/adaptive_phone_canvas.dart';
 import 'measure_page.dart';
@@ -11,12 +13,16 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  static const String _defaultServerUrl = 'http://192.168.0.110:8000';
+  static const String _serverUrlPrefKey = 'server_base_url';
   late final TextEditingController _serverUrlController;
+  bool _testingConnection = false;
 
   @override
   void initState() {
     super.initState();
-    _serverUrlController = TextEditingController(text: 'http://192.168.0.110:8000');
+    _serverUrlController = TextEditingController(text: _defaultServerUrl);
+    _restoreServerUrl();
   }
 
   @override
@@ -27,8 +33,51 @@ class _MainScreenState extends State<MainScreen> {
 
   String _normalizedBaseUrl() {
     final raw = _serverUrlController.text.trim();
-    if (raw.isEmpty) return 'http://192.168.0.110:8000';
+    if (raw.isEmpty) return _defaultServerUrl;
     return raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
+  }
+
+  Future<void> _restoreServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUrl = prefs.getString(_serverUrlPrefKey);
+    if (!mounted || savedUrl == null || savedUrl.trim().isEmpty) return;
+    _serverUrlController.text = savedUrl;
+  }
+
+  Future<void> _saveServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_serverUrlPrefKey, _normalizedBaseUrl());
+  }
+
+  Future<void> _testServerConnection() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final baseUrl = _normalizedBaseUrl();
+    final healthUri = Uri.parse(baseUrl).replace(path: '/health', query: null);
+
+    setState(() => _testingConnection = true);
+    try {
+      final resp = await http.get(healthUri).timeout(const Duration(seconds: 5));
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        await _saveServerUrl();
+        messenger.showSnackBar(
+          const SnackBar(content: Text('서버 연결 성공 (/health 응답 확인)')),
+        );
+      } else {
+        messenger.showSnackBar(
+          SnackBar(content: Text('연결 실패: HTTP ${resp.statusCode}')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('연결 실패: 주소/네트워크/서버 상태를 확인하세요.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _testingConnection = false);
+      }
+    }
   }
 
   @override
@@ -95,6 +144,7 @@ class _MainScreenState extends State<MainScreen> {
                           TextField(
                             controller: _serverUrlController,
                             keyboardType: TextInputType.url,
+                            onSubmitted: (_) => _saveServerUrl(),
                             decoration: InputDecoration(
                               labelText: '서버 주소',
                               hintText: 'http://IP:8000',
@@ -106,6 +156,16 @@ class _MainScreenState extends State<MainScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton(
+                              onPressed: _testingConnection ? null : _testServerConnection,
+                              child: Text(
+                                _testingConnection ? '연결 확인 중...' : '서버 연결 테스트',
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -114,7 +174,9 @@ class _MainScreenState extends State<MainScreen> {
                   SizedBox(
                     height: 54,
                     child: ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
+                        await _saveServerUrl();
+                        if (!context.mounted) return;
                         Navigator.push(
                           context,
                           MaterialPageRoute(

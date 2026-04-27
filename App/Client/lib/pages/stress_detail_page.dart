@@ -111,7 +111,7 @@ class StressDetailScreen extends StatelessWidget {
                           rangeTitle: '44점 ~ 100점',
                           badgeColor: Color(0xFFF06161),
                           stateTitle: '스트레스 상태',
-                          description: '높은 수준의 스트레스와 신체적 긴장이 감지됩니다. 잠시 하던 일을 멈추고 가벼운 스트레칭이나 심호흡을 권장합니다.',
+                          description: '높은 수준의 스트레스와 신체적 긴장이 감지됩니다. 잠시 하던 일을 멈추고 스트레칭이나 심호흡을 권장합니다.',
                         ),
                         _StressRangeCard(
                           top: 139,

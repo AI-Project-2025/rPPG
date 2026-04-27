@@ -37,24 +37,57 @@ class StreamStatus {
 class StreamData {
   final double? heartRate;
   final double? signalStrength;
+  final double? bvp;
   final int? frame;
   final List<double>? rppgSignal;
 
-  StreamData({this.heartRate, this.signalStrength, this.frame, this.rppgSignal});
+  StreamData({this.heartRate, this.signalStrength, this.bvp, this.frame, this.rppgSignal});
+}
+
+class ReportReadyData {
+  final Map<String, dynamic> report;
+  ReportReadyData(this.report);
 }
 
 class RppgServerClient {
   WebSocketChannel? _ch;
+  bool _disposed = false;
 
   final _statusCtrl = StreamController<StreamStatus>.broadcast();
   final _dataCtrl = StreamController<StreamData>.broadcast();
   final _errorCtrl = StreamController<String>.broadcast();
+  final _reportCtrl = StreamController<ReportReadyData>.broadcast();
 
   Stream<StreamStatus> get statusStream => _statusCtrl.stream;
   Stream<StreamData> get dataStream => _dataCtrl.stream;
   Stream<String> get errorStream => _errorCtrl.stream;
+  Stream<ReportReadyData> get reportStream => _reportCtrl.stream;
 
   bool get isConnected => _ch != null;
+
+  void _safeStatusAdd(StreamStatus value) {
+    if (!_disposed && !_statusCtrl.isClosed) {
+      _statusCtrl.add(value);
+    }
+  }
+
+  void _safeDataAdd(StreamData value) {
+    if (!_disposed && !_dataCtrl.isClosed) {
+      _dataCtrl.add(value);
+    }
+  }
+
+  void _safeErrorAdd(String value) {
+    if (!_disposed && !_errorCtrl.isClosed) {
+      _errorCtrl.add(value);
+    }
+  }
+
+  void _safeReportAdd(ReportReadyData value) {
+    if (!_disposed && !_reportCtrl.isClosed) {
+      _reportCtrl.add(value);
+    }
+  }
 
   /// Python client.py 로직 동일:
   /// - baseUrl이 주어지면: GET {baseUrl}/api/connection-info
@@ -81,34 +114,41 @@ class RppgServerClient {
         if (msg.containsKey('status')) {
           final s = msg['status']?.toString() ?? '';
           final m = msg['message']?.toString();
-          _statusCtrl.add(StreamStatus(s, m, payload: msg));
+          _safeStatusAdd(StreamStatus(s, m, payload: msg));
+          if (s == 'report_ready' && msg['report'] is Map<String, dynamic>) {
+            _safeReportAdd(ReportReadyData(msg['report'] as Map<String, dynamic>));
+          }
           return;
         }
 
         // data 메시지: heart_rate/signal_strength/frame/rppg_signal 등
         final hr = (msg['heart_rate'] is num) ? (msg['heart_rate'] as num).toDouble() : null;
         final ss = (msg['signal_strength'] is num) ? (msg['signal_strength'] as num).toDouble() : null;
+        final bvp = (msg['bvp'] is num) ? (msg['bvp'] as num).toDouble() : null;
         final frame = (msg['frame'] is num) ? (msg['frame'] as num).toInt() : null;
 
         List<double>? rppg;
         final sig = msg['rppg_signal'];
         if (sig is List) {
-          rppg = sig.whereType<num>().map((e) => e.toDouble()).toList(growable: false);
+          final nums = sig.whereType<num>().map((e) => e.toDouble()).toList(growable: false);
+          final start = nums.length > 180 ? nums.length - 180 : 0;
+          rppg = nums.sublist(start);
         }
 
-        _dataCtrl.add(StreamData(
+        _safeDataAdd(StreamData(
           heartRate: hr,
           signalStrength: ss,
+          bvp: bvp,
           frame: frame,
           rppgSignal: rppg,
         ));
       } catch (e) {
-        _errorCtrl.add('메시지 파싱 오류: $e');
+        _safeErrorAdd('메시지 파싱 오류: $e');
       }
     }, onError: (e) {
-      _errorCtrl.add('WebSocket 오류: $e');
+      _safeErrorAdd('WebSocket 오류: $e');
     }, onDone: () {
-      _errorCtrl.add('WebSocket 연결이 종료되었습니다.');
+      _safeErrorAdd('WebSocket 연결이 종료되었습니다.');
     });
   }
 
@@ -136,7 +176,20 @@ class RppgServerClient {
     _send({"action": "stop_streaming"});
   }
 
+  void sendFrameBase64(String frameData) {
+    if (!isConnected) {
+      // 종료/전환 타이밍 레이스에서 자주 발생하므로 조용히 무시
+      return;
+    }
+    if (_disposed) return;
+    _send({
+      "action": "frame",
+      "frame_data": frameData,
+    });
+  }
+
   void _send(Map<String, dynamic> msg) {
+    if (_disposed) return;
     _ch?.sink.add(jsonEncode(msg));
   }
 
@@ -146,9 +199,11 @@ class RppgServerClient {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await disconnect();
-    await _statusCtrl.close();
-    await _dataCtrl.close();
-    await _errorCtrl.close();
+    if (!_statusCtrl.isClosed) await _statusCtrl.close();
+    if (!_dataCtrl.isClosed) await _dataCtrl.close();
+    if (!_errorCtrl.isClosed) await _errorCtrl.close();
+    if (!_reportCtrl.isClosed) await _reportCtrl.close();
   }
 }
