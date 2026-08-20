@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rPPG 앱 화면 시뮬레이터 및 PPG 맥파 분석 대시보드</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+KR:wght@300;400;500;700;900&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --bg-card: #1e293b;
+      --bg-card-hover: #334155;
+      --accent-green: #2ecc71;
+      --accent-blue: #3b82f6;
+      --accent-purple: #8b5cf6;
+      --accent-pink: #ec4899;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border-color: #334155;
+      
+      --tier-stable: #61F097;
+      --tier-suspected: #F0EA3F;
+      --tier-high: #F06161;
+
+      --sim-primary: #3182ce;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Noto Sans KR', 'Inter', sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 30px 20px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* Top Navigation Header */
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: rgba(46, 204, 113, 0.15);
+      color: var(--accent-green);
+      border: 1px solid rgba(46, 204, 113, 0.3);
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+    }
+
+    header h1 {
+      font-family: 'Outfit', 'Noto Sans KR', sans-serif;
+      font-size: 2.4rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 10px;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+    }
+
+    /* Main Dashboard Layout */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 440px 1fr;
+      gap: 36px;
+      align-items: start;
+    }
+
+    @media (max-width: 1100px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Section Card Styles */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      margin-bottom: 24px;
+    }
+
+    .card-title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      color: #fff;
+    }
+
+    .card-title .icon {
+      width: 32px;
+      height: 32px;
+      background: rgba(59, 130, 246, 0.15);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-blue);
+      font-size: 1.1rem;
+    }
+
+    /* Phone Frame Mockup */
+    .phone-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .screen-selector-tabs {
+      display: flex;
+      gap: 8px;
+      background: #0f172a;
+      padding: 6px;
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      margin-bottom: 20px;
+      width: 100%;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 700;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .tab-btn.active {
+      background: var(--accent-green);
+      color: #000;
+      box-shadow: 0 4px 12px rgba(46, 204, 113, 0.3);
+    }
+
+    /* Smartphone Device Frame */
+    .phone-mockup {
+      width: 380px;
+      height: 780px;
+      background: #000;
+      border-radius: 48px;
+      border: 10px solid #2d3748;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 2px #1a202c;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .phone-notch {
+      width: 120px;
+      height: 24px;
+      background: #000;
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      border-bottom-left-radius: 14px;
+      border-bottom-right-radius: 14px;
+      z-index: 100;
+    }
+
+    .phone-screen {
+      width: 100%;
+      height: 100%;
+      background: #EEF3F5;
+      color: #111;
+      position: relative;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      font-family: 'Noto Sans KR', sans-serif;
+    }
+
+    /* SCREEN 1: MAIN SETUP PAGE */
+    .screen-main {
+      padding: 50px 20px 24px 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #EEF3F5;
+    }
+
+    .app-title {
+      font-size: 26px;
+      font-weight: 900;
+      text-align: center;
+      color: #111;
+      margin-top: 10px;
+    }
+
+    .app-subtitle {
+      font-size: 13px;
+      text-align: center;
+      color: #5D646B;
+      font-weight: 500;
+      margin-top: 6px;
+      margin-bottom: 24px;
+    }
+
+    .info-card {
+      background: #ffffff;
+      border-radius: 24px;
+      padding: 20px;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+    }
+
+    .info-row {
+      background: #F5F7F9;
+      padding: 12px 14px;
+      border-radius: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .info-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: #59626B;
+    }
+
+    .info-val {
+      font-size: 14px;
+      font-weight: 800;
+      color: #151515;
+    }
+
+    .input-field {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      font-size: 13px;
+      margin-top: 4px;
+      background: #fff;
+    }
+
+    .btn-outlined {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #111;
+      border-radius: 12px;
+      background: transparent;
+      color: #111;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    .btn-primary {
+      width: 100%;
+      height: 52px;
+      background: #111;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+
+    /* SCREEN 2: MEASURE PAGE */
+    .screen-measure {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: #111;
+      color: #fff;
+      padding-top: 40px;
+    }
+
+    .measure-header {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0,0,0,0.5);
+    }
+
+    .timer-badge {
+      background: rgba(46, 204, 113, 0.2);
+      color: #2ecc71;
+      border: 1px solid #2ecc71;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .camera-viewport {
+      position: relative;
+      width: 100%;
+      height: 380px;
+      background: #1e293b;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .face-sim {
+      width: 180px;
+      height: 230px;
+      border: 2px dashed rgba(46, 204, 113, 0.7);
+      border-radius: 50% / 45%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: pulseFace 2s infinite ease-in-out;
+    }
+
+    @keyframes pulseFace {
+      0%, 100% { border-color: rgba(46, 204, 113, 0.5); transform: scale(1); }
+      50% { border-color: rgba(46, 204, 113, 0.9); transform: scale(1.02); }
+    }
+
+    .face-landmark-dots {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+    }
+    
+    .dot {
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      background: #2ecc71;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #2ecc71;
+    }
+
+    .measure-metrics {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .metric-card {
+      background: #1e293b;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid #334155;
+    }
+
+    .metric-title {
+      font-size: 11px;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    .metric-value {
+      font-size: 22px;
+      font-weight: 800;
+      color: #2ecc71;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .waveform-box {
+      margin: 0 14px;
+      background: #0f172a;
+      border-radius: 14px;
+      padding: 10px;
+      border: 1px solid #334155;
+    }
+
+    .waveform-title {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    canvas#liveWaveformCanvas {
+      width: 100%;
+      height: 70px;
+      display: block;
+    }
+
+    /* SCREEN 3: STRESS RESULT DETAIL */
+    .screen-result {
+      padding: 40px 16px 20px 16px;
+      background: #EEF3F5;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .result-tier-banner {
+      background: #ffffff;
+      border-radius: 20px;
+      padding: 18px;
+      text-align: center;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.05);
+    }
+
+    .tier-badge {
+      display: inline-block;
+      padding: 6px 18px;
+      border-radius: 20px;
+      font-weight: 800;
+      font-size: 15px;
+      color: #111;
+      margin-bottom: 8px;
+    }
+
+    .score-circle {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      border: 8px solid var(--tier-stable);
+      margin: 10px auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .score-num {
+      font-size: 32px;
+      font-weight: 900;
+      color: #111;
+      line-height: 1;
+    }
+
+    .score-unit {
+      font-size: 11px;
+      color: #64748b;
+      font-weight: 700;
+    }
+
+    .tier-desc {
+      font-size: 12px;
+      color: #475569;
+      text-align: left;
+      line-height: 1.5;
+      background: #f8fafc;
+      padding: 12px;
+      border-radius: 12px;
+      margin-top: 10px;
+    }
+
+    /* PPG STRESS SIMULATOR IN DASHBOARD */
+    .sim-card {
+      background: #ffffff;
+      color: #2d3748;
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+      margin-bottom: 24px;
+    }
+
+    .sim-header {
+      margin-bottom: 20px;
+    }
+    
+    .sim-header h2 {
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: #1a202c;
+      margin-bottom: 6px;
+    }
+
+    .sim-preset-btns {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .btn-sim-preset {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: 1px solid #e2e8f0;
+      transition: all 0.2s;
+    }
+
+    .btn-sim-preset.normal {
+      background: #ebf8ff;
+      color: #2b6cb0;
+      border-color: #bee3f8;
+    }
+
+    .btn-sim-preset.stress {
+      background: #fff5f5;
+      color: #c53030;
+      border-color: #fed7d7;
+    }
+
+    .sim-slider-row {
+      margin-bottom: 16px;
+    }
+
+    .sim-slider-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: #4a5568;
+      margin-bottom: 6px;
+    }
+
+    .sim-slider-val {
+      color: #3182ce;
+      font-family: monospace;
+    }
+
+    .sim-chart-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .sim-chart-box h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #2d3748;
+      margin-bottom: 12px;
+      border-left: 4px solid #3182ce;
+      padding-left: 8px;
+    }
+
+    .chart-wrapper {
+      position: relative;
+      height: 200px;
+      width: 100%;
+    }
+
+    /* RIGHT PANEL ARCHITECTURE */
+    .architecture-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .tech-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .tech-pill {
+      background: rgba(59, 130, 246, 0.12);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .flow-node {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--accent-blue);
+      border-radius: 12px;
+      padding: 14px;
+    }
+
+    .flow-node.highlight { border-left-color: var(--accent-green); }
+    .flow-node.ml { border-left-color: var(--accent-purple); }
+
+    .flow-step { font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+    .flow-title { font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .flow-desc { font-size: 0.82rem; color: #94a3b8; }
+
+    .toast {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #111;
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <div class="badge">rPPG Remote Photoplethysmography Analysis</div>
+      <h1>rPPG 앱 구조 & PPG 맥파 반응 시뮬레이터</h1>
+      <p>카메라 기반 비접촉 심박수 & 자율신경계 스트레스 반응 시뮬레이션 대시보드</p>
+    </header>
+
+    <div class="dashboard-grid">
+      
+      <!-- LEFT COLUMN: INTERACTIVE PHONE MOCKUP -->
+      <div class="phone-container">
+        <div class="screen-selector-tabs">
+          <button class="tab-btn active" onclick="switchScreen('main')">1. 메인 설정</button>
+          <button class="tab-btn" onclick="switchScreen('measure')">2. 실시간 측정</button>
+          <button class="tab-btn" onclick="switchScreen('result')">3. 스트레스 결과</button>
+        </div>
+
+        <div class="phone-mockup">
+          <div class="phone-notch"></div>
+          
+          <!-- SCREEN 1: MAIN SETUP PAGE -->
+          <div id="screen-main" class="phone-screen screen-main">
+            <div class="app-title">rPPG 측정</div>
+            <div class="app-subtitle">카메라를 통해 심박수와 스트레스 지수를 측정합니다</div>
+
+            <div class="info-card">
+              <div class="info-row">
+                <span class="info-label">측정 시간</span>
+                <span class="info-val">35초</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">결과 항목</span>
+                <span class="info-val">심박수 / 스트레스</span>
+              </div>
+
+              <div style="margin-top: 10px;">
+                <label style="font-size: 12px; font-weight: 700; color: #475569;">서버 주소</label>
+                <input type="text" class="input-field" value="http://220.149.128.13:8888" readonly>
+              </div>
+
+              <button class="btn-outlined" onclick="triggerHealthTest()">서버 연결 테스트</button>
+            </div>
+
+            <button class="btn-primary" onclick="switchScreen('measure')">시작하기</button>
+          </div>
+
+          <!-- SCREEN 2: REAL-TIME MEASURE PAGE -->
+          <div id="screen-measure" class="phone-screen screen-measure" style="display: none;">
+            <div class="measure-header">
+              <span class="timer-badge" id="countdownTimer">35초 남음</span>
+              <span style="font-size: 11px; color: #94a3b8;">🟢 WebSocket 연결됨</span>
+            </div>
+
+            <div class="camera-viewport">
+              <div class="face-sim">
+                <div class="face-landmark-dots">
+                  <div class="dot" style="top: 30%; left: 40%;"></div>
+                  <div class="dot" style="top: 30%; left: 60%;"></div>
+                  <div class="dot" style="top: 22%; left: 50%;"></div>
+                  <div class="dot" style="top: 60%; left: 35%;"></div>
+                  <div class="dot" style="top: 60%; left: 65%;"></div>
+                  <div class="dot" style="top: 75%; left: 50%;"></div>
+                </div>
+                <span style="font-size: 11px; color: rgba(255,255,255,0.7); text-align: center; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 8px;">
+                  얼굴을 원 안에 맞추세요
+                </span>
+              </div>
+            </div>
+
+            <div class="measure-metrics">
+              <div class="metric-card">
+                <div class="metric-title">실시간 심박수</div>
+                <div class="metric-value"><span style="color: #ef4444; font-size: 18px;">♥</span> <span id="hrVal">74</span> <span style="font-size: 12px; color: #94a3b8;">BPM</span></div>
+              </div>
+              <div class="metric-card">
+                <div class="metric-title">신호 품질 (SNR)</div>
+                <div class="metric-value" style="color: #60a5fa;">94.2 <span style="font-size: 12px; color: #94a3b8;">dB</span></div>
+              </div>
+            </div>
+
+            <div class="waveform-box">
+              <div class="waveform-title">
+                <span>실시간 rPPG BVP 파형</span>
+                <span>30 FPS</span>
+              </div>
+              <canvas id="liveWaveformCanvas"></canvas>
+            </div>
+
+            <div style="padding: 12px 14px;">
+              <button class="btn-primary" style="margin-top: 0; background: #ef4444;" onclick="switchScreen('result')">측정 완료 (결과 보기)</button>
+            </div>
+          </div>
+
+          <!-- SCREEN 3: STRESS RESULT DETAIL PAGE -->
+          <div id="screen-result" class="phone-screen screen-result" style="display: none;">
+            <div style="text-align: center; font-size: 18px; font-weight: 800; color: #111;">측정 결과 리포트</div>
+            
+            <div class="result-tier-banner">
+              <div class="tier-badge" id="resultBadge" style="background: var(--tier-stable);">안정 상태</div>
+              <div class="score-circle" id="scoreCircle" style="border-color: var(--tier-stable);">
+                <div class="score-num" id="scoreNum">28</div>
+                <div class="score-unit">스트레스 점수</div>
+              </div>
+
+              <div class="tier-desc" id="tierDesc">
+                차분하고 안정적인 상태를 유지하고 있습니다. 과도한 긴장 없이 편안하게 일에 집중하기 좋은 컨디션입니다.
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 6px; justify-content: center;">
+              <button onclick="setResultTier('stable')" style="padding: 4px 10px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 11px; cursor: pointer; background: #fff;">안정 (0~33)</button>
+              <button onclick="setResultTier('suspected')" style="padding: 4px 10px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 11px; cursor: pointer; background: #fff;">의심 (34~66)</button>
+              <button onclick="setResultTier('high')" style="padding: 4px 10px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 11px; cursor: pointer; background: #fff;">높음 (67~100)</button>
+            </div>
+
+            <div style="background: #fff; padding: 14px; border-radius: 16px;">
+              <div style="font-size: 12px; font-weight: 700; color: #111; margin-bottom: 6px;">전처리된 5초 rPPG 파형</div>
+              <canvas id="resultWaveformCanvas" style="width: 100%; height: 60px;"></canvas>
+            </div>
+
+            <button class="btn-outlined" style="background: #fff; border-color: #cbd5e1;" onclick="switchScreen('main')">다시 측정하기</button>
+          </div>
+
+          <div id="toast" class="toast">서버 연결 성공 (/health 응답 확인)</div>
+        </div>
+      </div>
+
+
+      <!-- RIGHT COLUMN: PPG STRESS SIMULATOR & ARCHITECTURE -->
+      <div class="architecture-panel">
+        
+        <!-- PPG STRESS RESPONSE SIMULATOR CARD -->
+        <div class="sim-card">
+          <div class="sim-header">
+            <h2>📈 프로젝트 내 내장 PPG 자율신경계 시뮬레이터</h2>
+            <p style="font-size: 0.88rem; color: #718096;">
+              <code>App/Client/assets/ppg_stress_simulator.html</code>에 내장된 실제 시뮬레이터입니다.<br>
+              자율신경계(교감신경 활성화) 변화에 따른 맥파 파형(5초 연속 파형 & 단일 맥파 형태)을 직접 조절할 수 있습니다.
+            </p>
+          </div>
+
+          <div class="sim-preset-btns">
+            <button class="btn-sim-preset normal" onclick="loadSimPreset('normal')">안정 상태 프리셋</button>
+            <button class="btn-sim-preset stress" onclick="loadSimPreset('stress')">스트레스 프리셋</button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+            <div class="sim-slider-row">
+              <label>
+                <span>심박수 (Heart Rate)</span>
+                <span class="sim-slider-val" id="sim-hr-val">65 BPM</span>
+              </label>
+              <input type="range" id="sim-hr" min="50" max="150" value="65" oninput="updateSim()">
+            </div>
+
+            <div class="sim-slider-row">
+              <label>
+                <span>말초 혈관 수축 (Vasoconstriction)</span>
+                <span class="sim-slider-val" id="sim-vaso-val">10%</span>
+              </label>
+              <input type="range" id="sim-vaso" min="0" max="100" value="10" oninput="updateSim()">
+            </div>
+
+            <div class="sim-slider-row">
+              <label>
+                <span>혈관 경직도 (Arterial Stiffness)</span>
+                <span class="sim-slider-val" id="sim-stiff-val">10%</span>
+              </label>
+              <input type="range" id="sim-stiff" min="0" max="100" value="10" oninput="updateSim()">
+            </div>
+          </div>
+
+          <div style="background: #f7fafc; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; border: 1px solid #e2e8f0; margin-top: 10px; color: #4a5568;">
+            <strong>중복패임(Notch) 관찰:</strong> <span id="sim-notch-status" style="font-weight: bold; color: #234e52;">뚜렷한 중복패임(Dicrotic Notch) 관찰됨</span>
+          </div>
+
+          <!-- CHART 1: 5초 연속 PPG 파형 -->
+          <div class="sim-chart-box">
+            <h3>5초 연속 PPG 파형 (Continuous Waveform)</h3>
+            <div class="chart-wrapper">
+              <canvas id="continuousChartCanvas"></canvas>
+            </div>
+          </div>
+
+          <!-- CHART 2: 단일 맥파 형태 분석 -->
+          <div class="sim-chart-box">
+            <h3>단일 맥파 형태 분석 (Single Pulse Morphology)</h3>
+            <div class="chart-wrapper">
+              <canvas id="singleChartCanvas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Pipeline & Architecture Card -->
+        <div class="card">
+          <div class="card-title">
+            <div class="icon">🔄</div>
+            실시간 데이터 파이프라인 & 백엔드 모델
+          </div>
+
+          <div class="flow-grid">
+            <div class="flow-node highlight">
+              <div class="flow-step">Step 1. Client</div>
+              <div class="flow-title">카메라 프레임 캡처</div>
+              <div class="flow-desc">전면 카메라 YUV420 이미지 프레임을 약 30 FPS 속도로 WebSocket 전송</div>
+            </div>
+
+            <div class="flow-node">
+              <div class="flow-step">Step 2. Server</div>
+              <div class="flow-title">MediaPipe ROI 추출</div>
+              <div class="flow-desc">얼굴 영역(이마, 뺨)의 미세 색상(Green Channel) 신호 영역 자동 추적</div>
+            </div>
+
+            <div class="flow-node ml">
+              <div class="flow-step">Step 3. ML Model</div>
+              <div class="flow-title">BVP 신호 & HR 추정</div>
+              <div class="flow-desc"><code>model.onnx</code> 모델을 통해 BVP 파형 추출 및 <code>get_hr.onnx</code>로 심박수 산출</div>
+            </div>
+
+            <div class="flow-node ml">
+              <div class="flow-step">Step 4. Signal Processing</div>
+              <div class="flow-title">HRV & Welch PSD 지표</div>
+              <div class="flow-desc">IBI(심박간격), RMSSD, SNR, LF/HF 비율(자율신경계 균형) 신호 계산</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Tab Screen Switcher Logic
+    function switchScreen(screenName) {
+      document.getElementById('screen-main').style.display = 'none';
+      document.getElementById('screen-measure').style.display = 'none';
+      document.getElementById('screen-result').style.display = 'none';
+
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+
+      if (screenName === 'main') {
+        document.getElementById('screen-main').style.display = 'flex';
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+      } else if (screenName === 'measure') {
+        document.getElementById('screen-measure').style.display = 'flex';
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        startWaveformAnimation();
+        startMeasureTimer();
+      } else if (screenName === 'result') {
+        document.getElementById('screen-result').style.display = 'flex';
+        document.querySelectorAll('.tab-btn')[2].classList.add('active');
+        drawResultWaveform();
+      }
+    }
+
+    function triggerHealthTest() {
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    // Live Waveform Canvas Animation
+    let animId = null;
+    let waveOffset = 0;
+
+    function startWaveformAnimation() {
+      const canvas = document.getElementById('liveWaveformCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.parentElement.clientWidth - 20;
+      canvas.height = 70;
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.beginPath();
+        ctx.strokeStyle = '#2ecc71';
+        ctx.lineWidth = 2;
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const midY = height / 2;
+
+        for (let x = 0; x < width; x++) {
+          const t = (x + waveOffset) * 0.05;
+          const y = midY - (Math.sin(t) * 15 + Math.sin(t * 2) * 6 + Math.cos(t * 3) * 4);
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+
+        ctx.stroke();
+        waveOffset += 2;
+
+        if (Math.random() < 0.03) {
+          const hrElem = document.getElementById('hrVal');
+          if (hrElem) {
+            hrElem.innerText = Math.floor(71 + Math.random() * 6);
+          }
+        }
+
+        animId = requestAnimationFrame(render);
+      }
+
+      if (animId) cancelAnimationFrame(animId);
+      render();
+    }
+
+    let timerSec = 35;
+    let timerInterval = null;
+
+    function startMeasureTimer() {
+      timerSec = 35;
+      const timerElem = document.getElementById('countdownTimer');
+      if (timerInterval) clearInterval(timerInterval);
+
+      timerInterval = setInterval(() => {
+        timerSec--;
+        if (timerSec <= 0) {
+          clearInterval(timerInterval);
+          switchScreen('result');
+        } else {
+          if (timerElem) timerElem.innerText = `${timerSec}초 남음`;
+        }
+      }, 1000);
+    }
+
+    function setResultTier(tier) {
+      const badge = document.getElementById('resultBadge');
+      const scoreCircle = document.getElementById('scoreCircle');
+      const scoreNum = document.getElementById('scoreNum');
+      const desc = document.getElementById('tierDesc');
+
+      if (tier === 'stable') {
+        badge.innerText = '안정 상태';
+        badge.style.background = 'var(--tier-stable)';
+        scoreCircle.style.borderColor = 'var(--tier-stable)';
+        scoreNum.innerText = '28';
+        desc.innerText = '차분하고 안정적인 상태를 유지하고 있습니다. 과도한 긴장 없이 편안하게 일에 집중하기 좋은 컨디션입니다.';
+      } else if (tier === 'suspected') {
+        badge.innerText = '스트레스 의심';
+        badge.style.background = 'var(--tier-suspected)';
+        scoreCircle.style.borderColor = 'var(--tier-suspected)';
+        scoreNum.innerText = '52';
+        desc.innerText = '현재 약한 수준의 스트레스 반응이 감지되었습니다. 우선 충분한 휴식과 수면을 취하며 컨디션을 조절해 주세요.';
+      } else if (tier === 'high') {
+        badge.innerText = '고스트레스 상태';
+        badge.style.background = 'var(--tier-high)';
+        scoreCircle.style.borderColor = 'var(--tier-high)';
+        scoreNum.innerText = '84';
+        desc.innerText = '높은 수준의 스트레스와 신체적 긴장 상태가 감지됩니다. 정확한 상태 파악과 심리적 안정을 위해 휴식 및 전문가 상담을 권장합니다.';
+      }
+    }
+
+    function drawResultWaveform() {
+      const canvas = document.getElementById('resultWaveformCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = 60;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+
+      const width = canvas.width;
+      const height = canvas.height;
+      const midY = height / 2;
+
+      for (let x = 0; x < width; x++) {
+        const t = x * 0.08;
+        const y = midY - (Math.sin(t) * 12 + Math.sin(t * 2) * 5);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // --- PPG STRESS SIMULATOR CHART.JS LOGIC ---
+    let continuousChart = null;
+    let singleChart = null;
+
+    window.onload = function() {
+      initSimCharts();
+      updateSim();
+    };
+
+    function initSimCharts() {
+      const ctx1 = document.getElementById('continuousChartCanvas').getContext('2d');
+      continuousChart = new Chart(ctx1, {
+        type: 'line',
+        data: {
+          labels: Array.from({length: 500}, (_, i) => (i/100).toFixed(2)),
+          datasets: [{ label: 'PPG 신호 (AC)', data: [], borderColor: '#3182ce', borderWidth: 2.5, pointRadius: 0, fill: false, tension: 0.2 }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          scales: {
+            x: { title: { display: true, text: '시간 (초)', font: { size: 11 } }, ticks: { maxTicksLimit: 6 } },
+            y: { min: -0.6, max: 1.4, title: { display: true, text: '진폭 (a.u.)', font: { size: 11 } } }
+          },
+          plugins: { legend: { display: false } }
+        }
+      });
+
+      const ctx2 = document.getElementById('singleChartCanvas').getContext('2d');
+      singleChart = new Chart(ctx2, {
+        type: 'line',
+        data: {
+          labels: Array.from({length: 80}, (_, i) => (i/100).toFixed(2)),
+          datasets: [{ label: '맥파 프로파일', data: [], borderColor: '#3182ce', borderWidth: 3.5, pointRadius: 0, fill: false, tension: 0.2 }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          scales: {
+            x: { title: { display: true, text: '정규화된 시간', font: { size: 11 } }, ticks: { maxTicksLimit: 6 } },
+            y: { min: 0, max: 1.4, title: { display: true, text: '진폭', font: { size: 11 } } }
+          },
+          plugins: { legend: { display: false } }
+        }
+      });
+    }
+
+    function loadSimPreset(type) {
+      if (type === 'normal') {
+        document.getElementById('sim-hr').value = 65;
+        document.getElementById('sim-vaso').value = 10;
+        document.getElementById('sim-stiff').value = 10;
+      } else if (type === 'stress') {
+        document.getElementById('sim-hr').value = 95;
+        document.getElementById('sim-vaso').value = 75;
+        document.getElementById('sim-stiff').value = 80;
+      }
+      updateSim();
+    }
+
+    function updateSim() {
+      if (!continuousChart || !singleChart) return;
+      const hr = parseFloat(document.getElementById('sim-hr').value);
+      const vaso = parseFloat(document.getElementById('sim-vaso').value);
+      const stiff = parseFloat(document.getElementById('sim-stiff').value);
+
+      document.getElementById('sim-hr-val').innerText = hr + ' BPM';
+      document.getElementById('sim-vaso-val').innerText = vaso + '%';
+      document.getElementById('sim-stiff-val').innerText = stiff + '%';
+
+      const stressFactor = Math.max(vaso, stiff) / 100;
+      const currentPrimaryColor = blendColors('#3182ce', '#e53e3e', stressFactor);
+
+      const notchStatusText = document.getElementById('sim-notch-status');
+      if (stiff < 30) {
+        notchStatusText.innerText = "뚜렷한 중복패임(Dicrotic Notch) 관찰됨";
+        notchStatusText.style.color = "#234e52";
+      } else if (stiff < 70) {
+        notchStatusText.innerText = "중복패임 뭉툭해짐 (경직도 증가)";
+        notchStatusText.style.color = "#7b341e";
+      } else {
+        notchStatusText.innerText = "중복패임 평탄화/소실 (스트레스 상태)";
+        notchStatusText.style.color = "#9b2c2c";
+      }
+
+      const pulseInterval = 60.0 / hr;
+      const amp_scale = (100 - vaso * 0.55) / 100;
+      const amp_sys = 1.1 * amp_scale;
+      const amp_dia = (0.48 - (stiff * 0.32 / 100)) * amp_scale;
+      const notch_dist = 0.24 - (stiff * 0.08 / 100);
+
+      const fs = 100; const duration = 5; const totalPoints = fs * duration;
+      const yContinuous = new Array(totalPoints).fill(0);
+      const numPulses = Math.ceil(duration / pulseInterval) + 1;
+
+      for (let p = 0; p < numPulses; p++) {
+        const pulseTime = p * pulseInterval;
+        for (let i = 0; i < totalPoints; i++) {
+          const t = i / fs;
+          const sys = amp_sys * Math.exp(-Math.pow((t - pulseTime - 0.18 * pulseInterval) / (0.07 * pulseInterval), 2));
+          const dia = amp_dia * Math.exp(-Math.pow((t - pulseTime - (0.18 + notch_dist) * pulseInterval) / (0.11 * pulseInterval), 2));
+          yContinuous[i] += (sys + dia);
+        }
+      }
+
+      for (let i = 0; i < totalPoints; i++) {
+        const t = i / fs;
+        yContinuous[i] += 0.04 * Math.sin(2 * Math.PI * 0.12 * t);
+        yContinuous[i] -= (vaso * 0.002);
+      }
+
+      const ySingle = [];
+      for (let i = 0; i < 80; i++) {
+        const normT = i / 100;
+        const sys = amp_sys * Math.exp(-Math.pow((normT - 0.16) / 0.07, 2));
+        const dia = amp_dia * Math.exp(-Math.pow((normT - (0.16 + notch_dist)) / 0.11, 2));
+        ySingle.push(sys + dia);
+      }
+
+      continuousChart.data.datasets[0].data = yContinuous;
+      continuousChart.data.datasets[0].borderColor = currentPrimaryColor;
+      continuousChart.update('none');
+
+      singleChart.data.datasets[0].data = ySingle;
+      singleChart.data.datasets[0].borderColor = currentPrimaryColor;
+      singleChart.update('none');
+    }
+
+    function blendColors(color1, color2, percentage) {
+      const c1 = parseInt(color1.replace('#', ''), 16);
+      const c2 = parseInt(color2.replace('#', ''), 16);
+      const r1 = (c1 >> 16) & 255, g1 = (c1 >> 8) & 255, b1 = c1 & 255;
+      const r2 = (c2 >> 16) & 255, g2 = (c2 >> 8) & 255, b2 = c2 & 255;
+      const r = Math.round(r1 + (r2 - r1) * percentage);
+      const g = Math.round(g1 + (g2 - g1) * percentage);
+      const b = Math.round(b1 + (b2 - b1) * percentage);
+      return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+    }
+  </script>
+</body>
+</html>

@@ -179,12 +179,69 @@ def preprocess_ppg(
     return x
 
 
+# 결과 화면 rPPG 차트에 표시할 샘플 수 (30fps 기준 약 3.3초)
+RPPG_DISPLAY_SAMPLE_COUNT = 100
+
+
+def _rppg_preprocessed_display_tail(bvp_preprocessed: np.ndarray) -> List[float]:
+    if bvp_preprocessed is None or len(bvp_preprocessed) < 2:
+        return []
+    n = min(RPPG_DISPLAY_SAMPLE_COUNT, len(bvp_preprocessed))
+    tail = bvp_preprocessed[-n:]
+    return [float(x) for x in tail.tolist()]
+
+
+def _rppg_waveform_meta(bvp_tail: np.ndarray, fps: float) -> dict:
+    """차트 구간 길이·심박 피크 수(서버 find_peaks 기준)를 함께 전달."""
+    n = int(len(bvp_tail)) if bvp_tail is not None else 0
+    safe_fps = float(fps) if fps and fps > 0 else 30.0
+    duration_sec = round(n / safe_fps, 2) if n > 0 else 0.0
+    cardiac_peak_count = 0
+    if n >= 3:
+        min_distance = max(2, int(safe_fps / 3.0))
+        peaks, _ = find_peaks(np.asarray(bvp_tail, dtype=float), distance=min_distance)
+        cardiac_peak_count = int(len(peaks))
+    return {
+        "sample_count": n,
+        "duration_sec": duration_sec,
+        "cardiac_peak_count": cardiac_peak_count,
+    }
+
+
+async def _send_report_ready(websocket: WebSocket, report: dict):
+    await manager.send_personal_message(
+        json.dumps({
+            "status": "report_ready",
+            "message": "35초 측정(앞 5초 제외)이 완료되어 건강 리포트가 생성되었습니다.",
+            "report": report,
+        }),
+        websocket,
+    )
+
+
 def build_health_report(bvp_30s: List[float], fps: float, onnx_hr_samples: List[float] | None = None):
     bvp_arr = np.array(bvp_30s, dtype=np.float32)
-    bvp_arr = preprocess_ppg(bvp_arr, fs=fps)
-    metrics = calculate_rppg_metrics(bvp_arr, fps)
+    bvp_preprocessed = preprocess_ppg(bvp_arr, fs=fps)
+    bvp_tail = (
+        np.asarray(bvp_preprocessed[-RPPG_DISPLAY_SAMPLE_COUNT:], dtype=float)
+        if len(bvp_preprocessed) >= 2
+        else np.array([], dtype=float)
+    )
+    rppg_preprocessed_last_5s = [float(x) for x in bvp_tail.tolist()]
+    rppg_meta = {
+        "rppg_preprocessed_last_5s": rppg_preprocessed_last_5s,
+        "rppg_display_sample_count": RPPG_DISPLAY_SAMPLE_COUNT,
+        "rppg_sample_rate_hz": round(float(fps), 2),
+        "rppg_preprocessing": ["median_filter", "hampel_filter", "bandpass_filtfilt", "zscore"],
+        "rppg_waveform_meta": _rppg_waveform_meta(bvp_tail, fps),
+    }
+
+    metrics = calculate_rppg_metrics(bvp_preprocessed, fps)
     if "error" in metrics:
-        return {"error": metrics["error"]}
+        return {
+            "error": metrics["error"],
+            **rppg_meta,
+        }
 
     snr = metrics["Signal_Quality_SNR (dB)"]
     avg_hr_peak = metrics["Average_HR (BPM)"]
@@ -260,32 +317,26 @@ def build_health_report(bvp_30s: List[float], fps: float, onnx_hr_samples: List[
     stress_raw = float(np.clip(stress_raw, 1.0, 8.0))
     stress_score = round(_to_percent(stress_raw, 1.0, 8.0), 2)
 
-    detail_entries = {
-        "signal_quality": {"score": signal_quality_score, "text": _score_to_label_color(signal_quality_score)[0], "color": _score_to_label_color(signal_quality_score)[1]},
-        "stress_model": {"score": stress_score, "text": _score_to_label_color(stress_score)[0], "color": _score_to_label_color(stress_score)[1]},
-        "stress_resilience": {"score": resilience_score, "text": _score_to_label_color(resilience_score)[0], "color": _score_to_label_color(resilience_score)[1]},
-        "ans_balance": {"score": ans_balance_score, "text": _score_to_label_color(ans_balance_score)[0], "color": _score_to_label_color(ans_balance_score)[1]},
+    stress_detail = {
+        "score": stress_score,
+        "text": _score_to_label_color(stress_score)[0],
+        "color": _score_to_label_color(stress_score)[1],
     }
 
+    # 클라이언트에는 심박·스트레스 점수만 노출 (신호품질·ANS·회복력 등은 내부 계산용으로만 사용).
     report = {
-        "raw_metrics": metrics,
         "scores": {
-            "signal_quality": signal_quality_score,
             "stress_model": stress_score,
-            "stress_resilience": resilience_score,
-            "ans_balance": ans_balance_score,
             "average_heart_rate": round(avg_hr, 2),
         },
-        "details": detail_entries,
+        **rppg_meta,
+        "details": {
+            "stress_model": stress_detail,
+        },
         "debug": {
             "stress_source": stress_source,
-            "stress_features": stress_features,
             "stress_raw": round(stress_raw, 4),
-            "stress_from_resilience_raw": round(stress_from_resilience_raw, 4),
-            "snr_db": round(float(snr), 4),
             "model_error": model_error,
-            "lf_hf_raw": round(float(lf_hf_raw), 4),
-            "lf_hf_clamped": round(float(lf_hf_clamped), 4),
             "avg_hr_peak_based": round(float(avg_hr_peak), 2),
             "avg_hr_source": "onnx_mean" if onnx_hr_samples else "peak_based",
         },
@@ -293,7 +344,7 @@ def build_health_report(bvp_30s: List[float], fps: float, onnx_hr_samples: List[
     print(
         "[report debug] "
         f"source={stress_source}, snr={snr:.2f}, stress_raw={stress_raw:.2f}, "
-        f"scores={report['scores']}"
+        f"scores={report['scores']}, rppg_points={len(rppg_preprocessed_last_5s)}"
     )
     return report
 
@@ -1052,14 +1103,7 @@ async def stream_data(websocket: WebSocket, fps: int = 30, frame_queue: asyncio.
                 if not report_sent and (time.time() - stream_start_time) >= REPORT_TOTAL_SEC:
                     report_sent = True
                     report = build_health_report(bvp_30s, measured_fps, onnx_hr_samples=hr_for_report)
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "status": "report_ready",
-                            "message": "35초 측정(앞 5초 제외)이 완료되어 건강 리포트가 생성되었습니다.",
-                            "report": report,
-                        }),
-                        websocket,
-                    )
+                    await _send_report_ready(websocket, report)
                 await manager.send_personal_message(
                     json.dumps({
                         "status": "waiting_frame",
@@ -1207,14 +1251,7 @@ async def stream_data(websocket: WebSocket, fps: int = 30, frame_queue: asyncio.
             if not report_sent and (time.time() - stream_start_time) >= REPORT_TOTAL_SEC:
                 report_sent = True
                 report = build_health_report(bvp_30s, measured_fps, onnx_hr_samples=hr_for_report)
-                await manager.send_personal_message(
-                    json.dumps({
-                        "status": "report_ready",
-                        "message": "35초 측정(앞 5초 제외)이 완료되어 건강 리포트가 생성되었습니다.",
-                        "report": report,
-                    }),
-                    websocket,
-                )
+                await _send_report_ready(websocket, report)
 
             # FPS 유지
             elapsed = time.time() - loop_start
@@ -1222,6 +1259,13 @@ async def stream_data(websocket: WebSocket, fps: int = 30, frame_queue: asyncio.
             await asyncio.sleep(sleep_time)
 
     except asyncio.CancelledError:
+        if not report_sent and len(bvp_30s) >= 2:
+            try:
+                report = build_health_report(bvp_30s, measured_fps, onnx_hr_samples=hr_for_report)
+                await _send_report_ready(websocket, report)
+                print(f"[report] stop/cancel 시 리포트 전송 (rppg_points={len(report.get('rppg_preprocessed_last_5s', []))})")
+            except Exception as e:
+                print(f"[report] cancel 시 리포트 전송 실패: {e}")
         print("스트리밍 작업 취소됨")
         raise
     except Exception as e:
@@ -1247,4 +1291,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

@@ -12,7 +12,8 @@ import '../services/rppg_server_client.dart';
 import '../state/measure_controller.dart';
 import '../utils/stats.dart';
 import '../widgets/adaptive_phone_canvas.dart';
-import 'result_page.dart';
+import '../widgets/rppg_waveform_chart.dart';
+import 'stress_detail_page.dart';
 
 class DataExtractionScreen extends StatefulWidget {
   final String serverBaseUrl;
@@ -33,6 +34,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
   StreamSubscription<String>? _serverErrorSub;
   StreamSubscription<ReportReadyData>? _serverReportSub;
   Map<String, dynamic>? _serverReport;
+  List<double> _cachedRppgPreprocessedLast5s = [];
 
   CameraController? cam;
 
@@ -43,6 +45,10 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
   Timer? _measureTimer;
   Timer? _tickTimer;
   bool _navigatedToResult = false;
+
+  /// 실시간 rPPG 슬라이딩 버퍼 (10초 @ 30fps).
+  static const int _rppgSlidingWindowSamples = 300;
+  final List<double> _rppgSamples = [];
 
   static const int measureDurationSeconds = 35;
 
@@ -119,6 +125,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
     if (controller.state == MeasureState.measuring) return;
 
     _navigatedToResult = false;
+    setState(() => _rppgSamples.clear());
     controller.start(durationSeconds: measureDurationSeconds);
 
     await WakelockPlus.enable();
@@ -180,16 +187,16 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
       await cam?.stopImageStream();
     } catch (_) {}
 
-    // 30초 종료 시점과 report_ready 전송 시점이 거의 겹쳐 레이스가 날 수 있다.
-    // 서버 점수를 우선 사용하기 위해 짧게 대기 후 종료한다.
-    if (_serverReport == null) {
-      final waitUntil = DateTime.now().add(const Duration(milliseconds: 1800));
-      while (_serverReport == null && DateTime.now().isBefore(waitUntil)) {
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
+    // stop_streaming 시 서버가 리포트를 보낸 뒤 연결을 끊는다.
+    _serverClient.stopStreaming();
+    final waitUntil = DateTime.now().add(const Duration(milliseconds: 3500));
+    while (DateTime.now().isBefore(waitUntil)) {
+      final rppgReady = _cachedRppgPreprocessedLast5s.length >= 2;
+      final scoresReady = _serverReport?['scores'] is Map<String, dynamic>;
+      if (rppgReady || scoresReady) break;
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
-    _serverClient.stopStreaming();
     await _serverClient.disconnect();
     await _serverDataSub?.cancel();
     await _serverErrorSub?.cancel();
@@ -209,21 +216,56 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
         : stressIndexFromHrSamples(samples, scaleStdDev: 10.0);
 
     controller.complete(avgHr: avg, stressIndex: stress);
-    _goToResult(serverReport: _serverReport);
+    _goToStressDetail(serverReport: _serverReport);
 
     await WakelockPlus.disable();
   }
 
-  void _goToResult({Map<String, dynamic>? serverReport}) {
+  static const int _rppgDisplaySampleCount = 100;
+
+  List<double> _rppgPreprocessedLast5s(Map<String, dynamic>? serverReport) {
+    const maxSamples = _rppgDisplaySampleCount;
+    if (_cachedRppgPreprocessedLast5s.length >= 2) {
+      final cached = _cachedRppgPreprocessedLast5s;
+      return cached.length <= maxSamples
+          ? List<double>.from(cached)
+          : cached.sublist(cached.length - maxSamples);
+    }
+    final raw = serverReport?['rppg_preprocessed_last_5s'] ??
+        serverReport?['rppg_preprocessed_last_10s'];
+    if (raw is! List) return const [];
+    final parsed = raw
+        .map((e) {
+          if (e is num) return e.toDouble();
+          return double.tryParse(e.toString()) ?? 0.0;
+        })
+        .where((v) => v.isFinite)
+        .toList();
+    if (parsed.length <= maxSamples) return parsed;
+    return parsed.sublist(parsed.length - maxSamples);
+  }
+
+  int _stressScorePercent(Map<String, dynamic>? serverReport, double stressIndex) {
+    final scores = serverReport?['scores'];
+    if (scores is Map<String, dynamic>) {
+      final m = scores['stress_model'];
+      if (m is num) return m.round().clamp(0, 100);
+    }
+    return (stressIndex * 25).round().clamp(0, 100);
+  }
+
+  void _goToStressDetail({Map<String, dynamic>? serverReport}) {
     if (!mounted || _navigatedToResult) return;
     _navigatedToResult = true;
+    final stressIdx = controller.stressIndex ?? 0.0;
+    final score = _stressScorePercent(serverReport, stressIdx);
+    final rppgLast5s = _rppgPreprocessedLast5s(serverReport);
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => DataExtractionResultScreen(
-          avgHr: controller.avgHr ?? 0.0,
-          stressIndex: controller.stressIndex ?? 0.0,
-          serverReport: serverReport,
+        builder: (_) => StressDetailScreen(
+          stressScore: score,
+          rppgPreprocessedLast5s: rppgLast5s,
         ),
       ),
     );
@@ -237,7 +279,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
       case MeasureState.measuring:
         break;
       case MeasureState.completed:
-        _goToResult();
+        _goToStressDetail(serverReport: _serverReport);
         break;
     }
   }
@@ -264,20 +306,17 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
 
       final hr = data.heartRate;
       if (hr != null) {
-        controller.updateLiveHr(
-          hr,
-          quality: _qualityFromSignalStrength(data.signalStrength),
-        );
+        controller.updateLiveHr(hr);
       }
 
-      // 성능 최적화 + 반영 안정성:
-      // 1) bvp 단일 샘플 우선
-      // 2) bvp가 없으면 rppg_signal 마지막 샘플을 즉시 반영
       final bvp = data.bvp;
-      if (bvp != null) {
-        controller.appendRppgSample(bvp);
-      } else if (data.rppgSignal != null && data.rppgSignal!.isNotEmpty) {
-        controller.appendRppgSample(data.rppgSignal!.last);
+      if (bvp != null && bvp.isFinite) {
+        setState(() {
+          _rppgSamples.add(bvp);
+          if (_rppgSamples.length > _rppgSlidingWindowSamples) {
+            _rppgSamples.removeAt(0);
+          }
+        });
       }
     });
 
@@ -290,16 +329,20 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
 
     _serverReportSub = _serverClient.reportStream.listen((data) {
       _serverReport = data.report;
+      final raw = data.report['rppg_preprocessed_last_5s'] ??
+          data.report['rppg_preprocessed_last_10s'];
+      if (raw is List) {
+        final parsed = raw.map((e) {
+          if (e is num) return e.toDouble();
+          return double.tryParse(e.toString()) ?? 0.0;
+        }).where((v) => v.isFinite).toList();
+        if (parsed.length >= 2) {
+          _cachedRppgPreprocessedLast5s = parsed.length <= _rppgDisplaySampleCount
+              ? parsed
+              : parsed.sublist(parsed.length - _rppgDisplaySampleCount);
+        }
+      }
     });
-  }
-
-  int _qualityFromSignalStrength(double? strength) {
-    if (strength == null) return 0;
-    if (strength >= 1.2) return 5;
-    if (strength >= 0.9) return 4;
-    if (strength >= 0.6) return 3;
-    if (strength >= 0.3) return 2;
-    return 1;
   }
 
   Uint8List? _cameraImageToJpeg(CameraImage image) {
@@ -357,7 +400,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
         final buttonText = switch (controller.state) {
           MeasureState.idle => '측정 시작',
           MeasureState.measuring => '측정중',
-          MeasureState.completed => '결과 보기',
+          MeasureState.completed => '스트레스 상세',
         };
 
         return Scaffold(
@@ -401,11 +444,9 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
                                   textAlign: TextAlign.center,
                                 ),
                                 const SizedBox(height: 6),
-                                _QualityDots(value: controller.quality),
-                                const SizedBox(height: 8),
                                 if (measuring)
                                   Text(
-                                    '남은 시간: ${controller.remainingSeconds}s',
+                                    '남은 시간: ${controller.remainingSeconds} sec',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 16,
@@ -420,53 +461,79 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
                     ),
                   ),
 
+                  // 실시간 rPPG 파형 (서버 HTML 테스트 페이지의 drawRppg 와 동일 소스)
+                  Positioned(
+                    left: 12,
+                    top: 556,
+                    child: SizedBox(
+                      width: 366,
+                      height: 90,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color.fromRGBO(0, 0, 0, 0.12),
+                              offset: Offset(-2, 2),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              measuring ? '실시간 rPPG' : 'rPPG',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF334155),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: _rppgSamples.length >= 2
+                                    ? RppgWaveformChart(
+                                        samples: _rppgSamples,
+                                        fixedWindowSize: _rppgSlidingWindowSamples,
+                                      )
+                                    : Container(
+                                        color: const Color(0xFFF8FAFC),
+                                        alignment: Alignment.center,
+                                        child: Text(
+                                          measuring ? '신호 대기중…' : '측정 시작 후 표시',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.grey.shade500,
+                                          ),
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
                   // 정보
                   Positioned(
                     left: 0,
-                    top: 552,
+                    top: 654,
                     child: SizedBox(
                       width: 390,
-                      height: 231,
+                      height: 118,
                       child: Stack(
                         children: [
-                          // 파형 박스
-                          Positioned(
-                            left: 4,
-                            top: 4,
-                            child: Container(
-                              width: 382,
-                              height: 99,
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Color(0xFFF6F8F9),
-                                    Color(0xFFF6F8F8),
-                                    Color(0xFFE2E3E4),
-                                  ],
-                                  stops: [0.4471, 0.5982, 1.0],
-                                ),
-                                borderRadius: BorderRadius.circular(16),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color.fromRGBO(0, 0, 0, 0.12),
-                                    offset: Offset(0, 2),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                                child: _SignalWaveform(samples: controller.rppgSamples),
-                              ),
-                            ),
-                          ),
-
                           // 상태 및 심박수
                           Positioned(
                             left: 0,
-                            top: 117,
+                            top: 4,
                             child: SizedBox(
                               width: 390,
                               height: 114,
@@ -596,7 +663,7 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
                     right: 20,
                     bottom: 24,
                     child: SizedBox(
-                      height: 52,
+                      height: 45,
                       child: ElevatedButton(
                         onPressed: measuring ? null : _onButtonPressed,
                         style: ElevatedButton.styleFrom(
@@ -623,141 +690,5 @@ class _DataExtractionScreenState extends State<DataExtractionScreen> {
         );
       },
     );
-  }
-}
-
-class _QualityDots extends StatelessWidget {
-  final int value;
-  const _QualityDots({required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(5, (i) {
-        final on = i < value;
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: on ? const Color(0xFF2ECC71) : Colors.white38,
-          ),
-        );
-      }),
-    );
-  }
-}
-
-class _SignalWaveform extends StatelessWidget {
-  final List<double> samples;
-
-  const _SignalWaveform({required this.samples});
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _SignalWavePainter(samples: samples),
-      child: const SizedBox.expand(),
-    );
-  }
-}
-
-class _SignalWavePainter extends CustomPainter {
-  final List<double> samples;
-  static const int _displayWindowSamples = 20; // 약 2초(전송 주기 100ms 기준)
-
-  _SignalWavePainter({required this.samples});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final baselineY = size.height / 2;
-
-    final axisPaint = Paint()
-      ..color = const Color(0xFFB6BEC8)
-      ..strokeWidth = 1;
-
-    canvas.drawLine(
-      Offset(0, baselineY),
-      Offset(size.width, baselineY),
-      axisPaint,
-    );
-
-    if (samples.isEmpty) return;
-
-    final points = samples.length > _displayWindowSamples
-        ? samples.sublist(samples.length - _displayWindowSamples)
-        : samples;
-    final normalizedPoints = _normalizeForWave(points);
-
-    final path = Path();
-    final amp = size.height * 0.33;
-    final dx = normalizedPoints.length > 1
-        ? size.width / (normalizedPoints.length - 1)
-        : size.width;
-
-    for (int i = 0; i < normalizedPoints.length; i++) {
-      final x = i * dx;
-      final y = baselineY - (normalizedPoints[i] * amp);
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-
-    final wavePaint = Paint()
-      ..color = const Color(0xFFE53935)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    canvas.drawPath(path, wavePaint);
-  }
-
-  List<double> _normalizeForWave(List<double> values) {
-    if (values.isEmpty) return const [];
-    if (values.length == 1) return const [0.0];
-
-    final sorted = List<double>.from(values)..sort();
-    final q1 = _percentile(sorted, 0.25);
-    final q2 = _percentile(sorted, 0.50); // median
-    final q3 = _percentile(sorted, 0.75);
-    final iqr = (q3 - q1).abs();
-
-    // 이상치가 스케일을 망가뜨리지 않도록 IQR 기반으로 완만하게 절단
-    final lower = q1 - (1.5 * iqr);
-    final upper = q3 + (1.5 * iqr);
-    final clipped = values.map((v) => v.clamp(lower, upper).toDouble()).toList();
-
-    // 중앙값 기준 zero-center
-    final centered = clipped.map((v) => v - q2).toList();
-    double maxAbs = 0.0;
-    for (final v in centered) {
-      final a = v.abs();
-      if (a > maxAbs) maxAbs = a;
-    }
-
-    if (maxAbs < 1e-6) {
-      return List<double>.filled(values.length, 0.0);
-    }
-    return centered.map((v) => (v / maxAbs).clamp(-1.0, 1.0)).toList();
-  }
-
-  double _percentile(List<double> sorted, double p) {
-    if (sorted.isEmpty) return 0.0;
-    final rank = p.clamp(0.0, 1.0) * (sorted.length - 1);
-    final low = rank.floor();
-    final high = rank.ceil();
-    if (low == high) return sorted[low];
-    final t = rank - low;
-    return sorted[low] * (1.0 - t) + sorted[high] * t;
-  }
-
-  @override
-  bool shouldRepaint(covariant _SignalWavePainter oldDelegate) {
-    return oldDelegate.samples != samples;
   }
 }

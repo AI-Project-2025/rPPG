@@ -13,7 +13,9 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  static const String _defaultServerUrl = 'http://192.168.0.110:8000';
+  /// 연구실 밖(학교 Wi‑Fi 등): 공인 IP + ipTIME 외부포트 → 내부 서버(192.168.0.110:8080).
+  /// 연구실 안만 쓸 때는 `http://192.168.0.110:8080` 로 바꿔도 됩니다.
+  static const String _defaultServerUrl = 'http://220.149.128.13:8888';
   static const String _serverUrlPrefKey = 'server_base_url';
   late final TextEditingController _serverUrlController;
   bool _testingConnection = false;
@@ -138,7 +140,7 @@ class _MainScreenState extends State<MainScreen> {
                           const SizedBox(height: 10),
                           _InfoRow(
                             label: '결과 항목',
-                            value: '심박수 / 스트레스 / 신호 품질',
+                            value: '심박수 / 스트레스',
                           ),
                           const SizedBox(height: 14),
                           TextField(
@@ -147,7 +149,7 @@ class _MainScreenState extends State<MainScreen> {
                             onSubmitted: (_) => _saveServerUrl(),
                             decoration: InputDecoration(
                               labelText: '서버 주소',
-                              hintText: 'http://IP:8000',
+                              hintText: 'http://공인IP:8888 (외부 8888→내부 8080)',
                               isDense: true,
                               filled: true,
                               fillColor: Colors.white,

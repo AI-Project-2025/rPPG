@@ -115,8 +115,13 @@ class RppgServerClient {
           final s = msg['status']?.toString() ?? '';
           final m = msg['message']?.toString();
           _safeStatusAdd(StreamStatus(s, m, payload: msg));
-          if (s == 'report_ready' && msg['report'] is Map<String, dynamic>) {
-            _safeReportAdd(ReportReadyData(msg['report'] as Map<String, dynamic>));
+          if (s == 'report_ready') {
+            final reportRaw = msg['report'];
+            if (reportRaw is Map) {
+              _safeReportAdd(
+                ReportReadyData(Map<String, dynamic>.from(reportRaw)),
+              );
+            }
           }
           return;
         }
